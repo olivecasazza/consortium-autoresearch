@@ -1,7 +1,10 @@
 //! Builder health checking — probe builders for SSH connectivity and Nix store access.
 
 use std::process::Command;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
+
+use consortium::dag::{DagBuilder, DagContext, DagTask, TaskOutcome};
 
 use crate::config::{Builder, FleetConfig};
 use crate::error::{NixError, Result};
@@ -19,14 +22,93 @@ pub struct HealthStatus {
     pub error: Option<String>,
 }
 
+/// Task for probing a single builder's health.
+struct HealthCheckTask {
+    builder: Builder,
+}
+
+impl DagTask for HealthCheckTask {
+    fn execute(&self, ctx: &DagContext) -> TaskOutcome {
+        let status = check_builder(&self.builder);
+
+        // Store the result in the shared context using the builder hostname as key
+        let results: Arc<Mutex<Vec<HealthStatus>>> = match ctx.get_state("health_results") {
+            Some(r) => r,
+            None => {
+                let r = Arc::new(Mutex::new(Vec::new()));
+                ctx.set_state("health_results", r.clone());
+                r
+            }
+        };
+
+        results.lock().unwrap().push(status);
+        TaskOutcome::Success
+    }
+
+    fn describe(&self) -> String {
+        format!("health check: {}", self.builder.host)
+    }
+}
+
 /// Probe all builders in the fleet and return their health status.
+///
+/// Uses consortium's DAG executor to parallelize health checks across builders.
+/// Each builder's health is checked independently and concurrently.
 pub fn check_builders(config: &FleetConfig) -> Vec<HealthStatus> {
-    // TODO: parallelize with consortium's SshWorker + fanout
-    config
-        .builders
-        .values()
-        .map(|builder| check_builder(builder))
-        .collect()
+    if config.builders.is_empty() {
+        return Vec::new();
+    }
+
+    // Create a shared context to collect results
+    let ctx = DagContext::new();
+    let results: Arc<Mutex<Vec<HealthStatus>>> = Arc::new(Mutex::new(Vec::new()));
+    ctx.set_state("health_results", results.clone());
+
+    // Build a DAG with one task per builder, all independent (no dependencies)
+    let mut builder_dag = DagBuilder::new();
+    builder_dag.context(ctx);
+
+    for (idx, (_, builder)) in config.builders.iter().enumerate() {
+        let task_id = format!("health-check-{}", idx);
+        builder_dag.add_task(
+            &task_id,
+            HealthCheckTask {
+                builder: builder.clone(),
+            },
+        );
+    }
+
+    // Run the DAG executor
+    match builder_dag.build() {
+        Ok(executor) => match executor.run() {
+            Ok(_) => {
+                // Extract results from the shared context
+                // After DAG execution, only we hold a reference to results
+                match Arc::try_unwrap(results) {
+                    Ok(mutex) => mutex.lock().unwrap().to_vec(),
+                    Err(arc_mutex) => arc_mutex.lock().unwrap().to_vec(),
+                }
+            }
+            Err(e) => {
+                eprintln!("warning: DAG executor failed: {}", e);
+                // Fall back to sequential checking
+                config
+                    .builders
+                    .values()
+                    .map(|builder| check_builder(builder))
+                    .collect()
+            }
+        },
+        Err(e) => {
+            eprintln!("warning: failed to build health check DAG: {}", e);
+            // Fall back to sequential checking
+            config
+                .builders
+                .values()
+                .map(|builder| check_builder(builder))
+                .collect()
+        }
+    }
 }
 
 /// Probe a single builder for health.
