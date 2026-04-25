@@ -21,7 +21,6 @@ pub fn copy_closures(plan: &DeploymentPlan) -> Result<CopyResults> {
         errors: HashMap::new(),
     };
 
-    // TODO: parallelize with consortium's Task/Worker fanout
     for target in &plan.targets {
         if !target.needs_copy {
             results.succeeded.push(target.node.name.clone());
