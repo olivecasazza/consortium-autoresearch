@@ -3,6 +3,10 @@
 use std::collections::HashMap;
 use std::io::Write as IoWrite;
 use std::process::Command;
+use std::sync::{Arc, Mutex};
+
+use consortium::dag::types::{FnTask, TaskOutcome};
+use consortium::dag::DagBuilder;
 
 use crate::config::DeploymentPlan;
 use crate::error::{NixError, Result};
@@ -20,39 +24,88 @@ pub struct BuildResults {
 ///
 /// If healthy builders are provided, generates a temporary machines file
 /// and uses Nix's native distributed build mechanism.
+///
+/// Parallelizes build operations via consortium's DAG executor, respecting
+/// the plan's max_parallel concurrency limit.
 pub fn build_closures(
     plan: &DeploymentPlan,
     flake_uri: &str,
     healthy_builders: Option<&[HealthStatus]>,
 ) -> Result<BuildResults> {
-    let mut results = BuildResults {
-        paths: HashMap::new(),
-        errors: HashMap::new(),
-    };
-
     // Generate temporary machines file if we have healthy builders
     let machines_file = healthy_builders
         .map(|builders| generate_machines_file_from_healthy(builders))
         .transpose()?;
 
-    // TODO: parallelize builds with consortium's Task/Worker infrastructure
+    // Shared results collected by DAG tasks
+    let build_paths: Arc<Mutex<HashMap<String, String>>> = Arc::new(Mutex::new(HashMap::new()));
+    let build_errors: Arc<Mutex<HashMap<String, NixError>>> = Arc::new(Mutex::new(HashMap::new()));
+
+    // Separate skipped targets (no build needed) from those requiring builds
+    let mut dag_builder = DagBuilder::new();
+    let flake_uri_owned = flake_uri.to_string();
+
     for target in &plan.targets {
         if !target.needs_build {
-            results
-                .paths
+            // Record skipped targets immediately
+            build_paths
+                .lock()
+                .unwrap()
                 .insert(target.node.name.clone(), target.toplevel_path.clone());
             continue;
         }
 
-        match build_host(flake_uri, &target.node.name, machines_file.as_deref()) {
+        let hostname = target.node.name.clone();
+        let flake_uri_clone = flake_uri_owned.clone();
+        let machines_file_clone = machines_file.clone();
+        let paths = Arc::clone(&build_paths);
+        let errors = Arc::clone(&build_errors);
+
+        // Create a task ID based on the hostname
+        let task_id = format!("build:{}", hostname);
+
+        // Create a closure that captures the build parameters
+        let task = FnTask::new(format!("build {}", hostname), move |_ctx| match build_host(
+            &flake_uri_clone,
+            &hostname,
+            machines_file_clone.as_deref(),
+        ) {
             Ok(path) => {
-                results.paths.insert(target.node.name.clone(), path);
+                paths.lock().unwrap().insert(hostname.clone(), path);
+                TaskOutcome::Success
             }
             Err(e) => {
-                results.errors.insert(target.node.name.clone(), e);
+                errors.lock().unwrap().insert(hostname.clone(), e);
+                TaskOutcome::Failed(format!("build failed for {}", hostname))
+            }
+        });
+
+        dag_builder.add_task(task_id, task);
+    }
+
+    // Set concurrency limit if specified
+    if plan.max_parallel > 0 {
+        dag_builder.concurrency_group("builds", plan.max_parallel);
+        for target in &plan.targets {
+            if target.needs_build {
+                let task_id = format!("build:{}", target.node.name);
+                dag_builder.assign_group(task_id, "builds");
             }
         }
     }
+
+    // Execute the DAG
+    let executor = dag_builder.build()?;
+    let _report = executor.run()?;
+
+    // Extract results from Arc<Mutex<_>>
+    let final_paths = build_paths.lock().unwrap().clone();
+    let final_errors = build_errors.lock().unwrap().clone();
+
+    let results = BuildResults {
+        paths: final_paths,
+        errors: final_errors,
+    };
 
     Ok(results)
 }
