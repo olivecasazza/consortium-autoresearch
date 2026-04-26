@@ -144,13 +144,16 @@ class ExecTest(unittest.TestCase):
             srcdir.cleanup()
 
     def test_rcopy_wrong_directory(self):
-        """test ExecWorker reverse copying with wrong directory"""
+        """test ExecWorker reverse copying with wrong (non-existent) directory"""
         with make_temp_dir() as dstbasedirname:
             dstdir = os.path.join(dstbasedirname, "wrong")
             src = make_temp_file(b"data")
-            self.assertRaises(ValueError, self.execw, nodes='localhost',
-                              handler=None, source=src.name, dest=dstdir,
-                              stderr=True, reverse=True)
+            # Sanity check is now deferred to _start(); cp fails at runtime
+            # rather than raising ValueError at worker construction time.
+            self.execw(nodes='localhost', handler=None, source=src.name,
+                       dest=dstdir, stderr=True, reverse=True)
+            self.assertNotEqual(task_self().max_retcode(), 0)
+            self.assertTrue(len(task_self().node_error("localhost")) > 0)
 
     def test_abort_on_read(self):
         """test ExecWorker.abort() on read"""

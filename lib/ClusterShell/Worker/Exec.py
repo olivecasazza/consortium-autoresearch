@@ -212,15 +212,16 @@ class CopyClient(ExecClient):
         # Reverse copy?
         self.reverse = reverse
 
-        # Directory?
-        # FIXME: file sanity checks could be moved to Copy._start() as we
-        # should now be able to handle error when starting (#215).
+        # isdir is resolved at start time in _start() below.
+        self.isdir = False
+
+    def _start(self):
+        """Resolve source/dest directory status then start client."""
         if self.reverse:
             self.isdir = os.path.isdir(self.dest)
-            if not self.isdir:
-                raise ValueError("reverse copy dest must be a directory")
         else:
             self.isdir = os.path.isdir(self.source)
+        return ExecClient._start(self)
 
     def _build_cmd(self):
         """
