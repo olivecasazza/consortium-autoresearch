@@ -1339,7 +1339,12 @@ class Task(object):
             logger = logging.getLogger(__name__)
             logger.debug("pchannel: creating new channel %s", chan)
             # invoke gateway
-            timeout = None # FIXME: handle timeout for gateway channels
+            # Use connect_timeout as the gateway channel worker timeout so
+            # the channel establishment is bounded the same way regular SSH
+            # workers are. A value of 0 means unlimited (no timer), so map
+            # it back to None (Engine treats -1 / None as "no timeout").
+            connect_timeout = self.info("connect_timeout", 0)
+            timeout = connect_timeout if connect_timeout > 0 else None
             wrkcls = self.default('distant_worker')
             chanworker = wrkcls(gateway, command=metaworker.invoke_gateway,
                                 handler=chan, stderr=True, timeout=timeout)
