@@ -5,6 +5,7 @@ Unit test for ClusterShell.Gateway
 import logging
 import os
 import re
+import threading
 import unittest
 import xml.sax
 
@@ -12,7 +13,7 @@ from ClusterShell import __version__
 from ClusterShell.Communication import ConfigurationMessage, ControlMessage, \
     StdOutMessage, StdErrMessage, RetcodeMessage, ACKMessage, ErrorMessage, \
     TimeoutMessage, StartMessage, EndMessage, XMLReader
-from ClusterShell.Gateway import GatewayChannel
+from ClusterShell.Gateway import GatewayChannel, TreeWorkerResponder
 from ClusterShell.NodeSet import NodeSet
 from ClusterShell.Task import Task, task_self
 from ClusterShell.Topology import TopologyGraph
@@ -482,3 +483,34 @@ class TreeGatewayTest(TreeGatewayBaseTest):
         """test gateway channel write multi (remote=False)"""
         self._check_channel_ctl_shell("cat", "n[10-49]", True, False,
                                       StdOutMessage, b"ok", write_buf=b"ok\n")
+
+    def test_ev_start_called_on_schedule(self):
+        """ev_start sets responder.worker via engine callback, not manually
+
+        Regression test: previously recv_ctl assigned responder.worker directly
+        as a workaround because ev_start was believed not to fire.  Verify that
+        ev_start IS called by the engine when the TreeWorker is scheduled on
+        an already-running gateway task, making the workaround unnecessary.
+        """
+        ev_start_calls = []
+
+        orig_ev_start = TreeWorkerResponder.ev_start
+
+        def tracking_ev_start(self_responder, worker):
+            ev_start_calls.append(worker)
+            orig_ev_start(self_responder, worker)
+
+        TreeWorkerResponder.ev_start = tracking_ev_start
+        try:
+            self._check_channel_ctl_shell("echo ok", "n10", False, False,
+                                          StdOutMessage, b"ok")
+            self.assertTrue(
+                len(ev_start_calls) >= 1,
+                "ev_start was never called — engine did not fire the callback"
+            )
+            self.assertIsNotNone(
+                ev_start_calls[0],
+                "ev_start was called with a None worker"
+            )
+        finally:
+            TreeWorkerResponder.ev_start = orig_ev_start

@@ -284,9 +284,6 @@ class GatewayChannel(Channel):
                                               newroot=self.nodename,
                                               stderr=stderr,
                                               remote=remote)
-                # FIXME ev_start-not-called workaround
-                responder.worker = self.propagation
-                self.propagation.upchannel = self
                 task.schedule(self.propagation)
                 self.logger.debug("TreeWorker scheduled")
                 self._ack(msg)
