@@ -194,6 +194,7 @@ impl UpcallGroupSource {
             .arg("-c")
             .arg(&command)
             .env("GROUP", arg)
+            .stdin(std::process::Stdio::null())
             .output()
             .map_err(|e| GroupSourceError::GroupSourceQueryFailed(e.to_string()))?;
 
@@ -590,6 +591,29 @@ mod tests {
     fn test_upcall_source_with_map() {
         let source = UpcallGroupSource::new(Some("echo web1,web2".to_string()), None, None, None);
         assert_eq!(source.resolve_map("test").unwrap(), "web1,web2");
+    }
+
+    /// Upcall commands must not block reading from stdin.
+    ///
+    /// Mirrors upstream fix cea-hpc/clustershell@129d6ed: pass DEVNULL as stdin
+    /// so that upcall scripts that accidentally read stdin do not hang the caller.
+    #[test]
+    fn test_upcall_source_stdin_is_null() {
+        // A command that reads all of stdin and echoes its length would hang
+        // forever if stdin were an open pipe; with Stdio::null() it sees EOF
+        // immediately and returns "0".
+        let source = UpcallGroupSource::new(
+            Some("wc -c < /dev/stdin | tr -d ' '".to_string()),
+            None,
+            None,
+            None,
+        );
+        let result = source.resolve_map("test").unwrap();
+        assert_eq!(
+            result, "0",
+            "upcall should receive no stdin (got {:?})",
+            result
+        );
     }
 
     #[test]
