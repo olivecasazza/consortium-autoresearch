@@ -293,7 +293,10 @@ class PropagationChannel(Channel):
 
         ctl_data = {
             'cmd': command,
-            'invoke_gateway': gw_invoke_cmd, # XXX
+            # The receiving gateway recomputes invoke_gateway from its own local
+            # environment (Python executable, PYTHONPATH, etc.), so this value
+            # is not applied there.  It is included for diagnostic logging only.
+            'invoke_gateway': gw_invoke_cmd,
             'taskinfo': info,
             'stderr': stderr,
             'timeout': timeout,

@@ -252,9 +252,13 @@ class GatewayChannel(Channel):
                 timeout = data['timeout']
                 remote = data['remote']
 
-                #self.propagation.invoke_gateway = data['invoke_gateway']
+                # invoke_gateway is included in the control message for
+                # diagnostic purposes only.  Each gateway builds its own
+                # invoke_gateway command from the local environment
+                # (Python executable, PYTHONPATH, etc.) in TreeWorker.__init__,
+                # so the value sent by the root is not applied here.
                 self.logger.debug('decoded gw invoke (%s)',
-                                  data['invoke_gateway'])
+                                  data.get('invoke_gateway', ''))
 
                 taskinfo = data['taskinfo']
                 self.logger.debug('assigning task infos (%s)', data['taskinfo'])
