@@ -161,7 +161,7 @@ class PropagationTreeRouter(object):
     def _best_next_hop(self, candidates):
         """find out a good next hop gateway"""
         backup = None
-        backup_connections = 1e400 # infinity
+        backup_connections = float('inf')
 
         candidates = candidates.difference(self._unreachable_hosts)
 
@@ -169,10 +169,6 @@ class PropagationTreeRouter(object):
             # the router tracks established connections in the
             # nodes_fanin table to avoid overloading a gateway
             connections = self.nodes_fanin.setdefault(host, 0)
-            # FIXME
-            #if connections < self.fanout:
-            #    # currently, the first one is the best
-            #    return host
             if backup_connections > connections:
                 backup = host
                 backup_connections = connections
