@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["DEFAULT_B64_LINE_LENGTH","ENCODING","SNAME_ERROR","SNAME_READER","SNAME_WRITER"],"enum":["Message","MessageProcessingError"],"fn":["base64_decode","base64_encode"],"struct":["Channel","XmlReader"],"trait":["ChannelHandler"]};

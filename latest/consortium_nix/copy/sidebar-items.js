@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["copy_closure","copy_closures"],"struct":["CopyResults"]};
