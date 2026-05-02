@@ -300,7 +300,7 @@ class PropagationChannel(Channel):
 
         ctl_data = {
             'cmd': command,
-            'invoke_gateway': gw_invoke_cmd, # XXX
+            'invoke_gateway': gw_invoke_cmd,  # unused but kept for protocol compatibility
             'taskinfo': info,
             'stderr': stderr,
             'timeout': timeout,
