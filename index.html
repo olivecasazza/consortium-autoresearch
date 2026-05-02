@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>consortium docs</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 800px; margin: 0 auto; padding: 2rem; color: #e0e0e0; background: #0d1117; }
+    h1 { font-size: 2rem; margin-bottom: 0.5rem; color: #f0f0f0; }
+    h1 code { font-size: 1.8rem; background: #1c2333; padding: 0.1em 0.3em; border-radius: 4px; color: #ff7b72; }
+    .subtitle { color: #8b949e; margin-bottom: 2rem; line-height: 1.5; }
+    h2 { font-size: 1.2rem; margin-top: 2rem; margin-bottom: 0.75rem; color: #c9d1d9; border-bottom: 1px solid #21262d; padding-bottom: 0.25rem; }
+    ul { list-style: none; }
+    li { padding: 0.4rem 0; }
+    a { color: #58a6ff; text-decoration: none; }
+    a:hover { text-decoration: underline; color: #79c0ff; }
+    .version-badge { background: #1c3a5f; color: #58a6ff; padding: 0.15em 0.5em; border-radius: 3px; font-size: 0.85rem; font-family: monospace; }
+    .crate-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; }
+    .crate-item { padding: 0.75rem; background: #161b22; border: 1px solid #30363d; border-radius: 6px; transition: border-color 0.2s; }
+    .crate-item:hover { border-color: #58a6ff; }
+    .crate-item code { font-size: 0.9rem; color: #ff7b72; }
+    .crate-desc { color: #8b949e; font-size: 0.85rem; margin-top: 0.25rem; }
+  </style>
+</head>
+<body>
+  <h1><code>consortium</code></h1>
+  <p class="subtitle">A Rust rewrite of ClusterShell &mdash; parallel cluster command execution with a generic DAG executor, NixOS deployment, and tool integrations.</p>
+
+  <h2>Versions</h2>
+  <ul id="versions">
+    <li><a href="latest/consortium/"><span class="version-badge">latest</span></a> &mdash; master branch</li>
+  </ul>
+
+  <h2>Crates</h2>
+  <div class="crate-grid">
+    <div class="crate-item">
+      <a href="latest/consortium/"><code>consortium</code></a>
+      <div class="crate-desc">Core library &mdash; DAG executor, NodeSet, SSH workers, MsgTree</div>
+    </div>
+    <div class="crate-item">
+      <a href="latest/consortium_nix/"><code>consortium-nix</code></a>
+      <div class="crate-desc">NixOS deployment &mdash; eval, build, copy, activate</div>
+    </div>
+    <div class="crate-item">
+      <a href="latest/consortium_cli/"><code>consortium-cli</code></a>
+      <div class="crate-desc">CLI tools &mdash; claw, molt, pinch, cast</div>
+    </div>
+    <div class="crate-item">
+      <a href="latest/consortium_ansible/"><code>consortium-ansible</code></a>
+      <div class="crate-desc">Ansible orchestration with nix-built environments</div>
+    </div>
+    <div class="crate-item">
+      <a href="latest/consortium_slurm/"><code>consortium-slurm</code></a>
+      <div class="crate-desc">Slurm job orchestration with nix-built environments</div>
+    </div>
+    <div class="crate-item">
+      <a href="latest/consortium_ray/"><code>consortium-ray</code></a>
+      <div class="crate-desc">Ray job orchestration via Jobs API</div>
+    </div>
+    <div class="crate-item">
+      <a href="latest/consortium_skypilot/"><code>consortium-skypilot</code></a>
+      <div class="crate-desc">SkyPilot multi-cloud job orchestration</div>
+    </div>
+    <div class="crate-item">
+      <a href="latest/consortium_py/"><code>consortium-py</code></a>
+      <div class="crate-desc">Python bindings via PyO3</div>
+    </div>
+  </div>
+
+  <script>
+    fetch('https://api.github.com/repos/olivecasazza/consortium/tags')
+      .then(r => r.json())
+      .then(tags => {
+        const ul = document.getElementById('versions');
+        if (!Array.isArray(tags)) return;
+        tags.filter(t => t.name.startsWith('v'))
+            .slice(0, 20)
+            .forEach(t => {
+              const li = document.createElement('li');
+              li.innerHTML = '<a href="' + t.name + '/consortium/"><span class="version-badge">' + t.name + '</span></a>';
+              ul.appendChild(li);
+            });
+      })
+      .catch(() => {});
+  </script>
+</body>
+</html>
