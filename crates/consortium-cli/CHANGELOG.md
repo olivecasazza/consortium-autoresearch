@@ -1,5 +1,18 @@
 # Changelog
 
+## Features
+
+- builder + contention + event protocol + cli viz
+- live in-place tree re-rendering on RoundCompleted
+- --per-round-delay flag for watchable live demos
+- per-node spinner state + claw --testbed deploy mode
+- --tb-seeds for multi-seed testbed deploys
+
+## Refactoring
+
+- use event_render instead of inline workarounds
+
+
 ## Bug Fixes
 
 - multi-dim pattern expansion, drain process output, group resolver, configparser 3.x
