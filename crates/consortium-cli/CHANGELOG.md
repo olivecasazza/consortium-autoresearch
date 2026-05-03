@@ -2,6 +2,25 @@
 
 ## Bug Fixes
 
+- use alt screen buffer to fix multi-n0 stacking
+- replicate nom's exact rendering protocol
+
+## Features
+
+- builder + contention + event protocol + cli viz
+- live in-place tree re-rendering on RoundCompleted
+- --per-round-delay flag for watchable live demos
+- per-node spinner state + claw --testbed deploy mode
+- --tb-seeds for multi-seed testbed deploys
+- LevelTreeFanOut strategy + claw default
+
+## Refactoring
+
+- use event_render instead of inline workarounds
+
+
+## Bug Fixes
+
 - multi-dim pattern expansion, drain process output, group resolver, configparser 3.x
 
 ## Features
