@@ -238,7 +238,7 @@ dependencies = [
 
 [[package]]
 name = "consortium-ansible"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "consortium-crate",
  "consortium-nix",
@@ -250,7 +250,7 @@ dependencies = [
 
 [[package]]
 name = "consortium-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -266,6 +266,7 @@ dependencies = [
  "indicatif",
  "is-terminal",
  "predicates",
+ "serde",
  "serde_json",
  "serde_yaml",
  "tempfile",
@@ -274,7 +275,7 @@ dependencies = [
 
 [[package]]
 name = "consortium-crate"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "configparser",
  "consortium-nix",
@@ -289,7 +290,7 @@ dependencies = [
 
 [[package]]
 name = "consortium-fanout-sim"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "consortium-cli",
  "consortium-nix",
@@ -302,7 +303,7 @@ dependencies = [
 
 [[package]]
 name = "consortium-nix"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "consortium-crate",
  "serde",
@@ -313,7 +314,7 @@ dependencies = [
 
 [[package]]
 name = "consortium-py"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "consortium-crate",
  "pyo3",
@@ -321,7 +322,7 @@ dependencies = [
 
 [[package]]
 name = "consortium-ray"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "consortium-crate",
  "consortium-nix",
@@ -332,7 +333,7 @@ dependencies = [
 
 [[package]]
 name = "consortium-skypilot"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "consortium-crate",
  "consortium-nix",
@@ -343,7 +344,7 @@ dependencies = [
 
 [[package]]
 name = "consortium-slurm"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "consortium-crate",
  "consortium-nix",
@@ -355,7 +356,7 @@ dependencies = [
 
 [[package]]
 name = "consortium-test-harness"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "consortium-crate",
  "consortium-nix",
