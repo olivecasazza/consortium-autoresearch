@@ -219,19 +219,39 @@ pub fn deploy_with_cascade(
         .map_err(|e| NixError::General(e.to_string()))?;
 
     // Collect successfully-built (host, toplevel) pairs from ctx1
-    // outputs. Skip hosts whose build failed.
+    // outputs. Skip hosts whose build failed OR whose build was
+    // cancelled because eval failed upstream.
     let mut targets_for_cascade: Vec<CascadeCopyTarget> = Vec::new();
     let mut build_failures: Vec<(String, String)> = Vec::new();
     for host in target_nodes {
         let build_id = TaskId(format!("build:{}", host));
+        let eval_id = TaskId(format!("eval:{}", host));
+
         if let Some(err) = phase1_report.failed.get(&build_id) {
-            build_failures.push((host.clone(), err.clone()));
+            build_failures.push((host.clone(), format!("build: {err}")));
+            continue;
+        }
+        // ContinueIndependent cancels build when eval fails for the
+        // same host. Surface the eval error rather than the misleading
+        // "build succeeded but no output" path, which only applies if
+        // the executor + context wiring is broken.
+        if let Some(err) = phase1_report.failed.get(&eval_id) {
+            build_failures.push((host.clone(), format!("eval (build cancelled): {err}")));
+            continue;
+        }
+        if phase1_report.cancelled.contains(&build_id) {
+            build_failures.push((
+                host.clone(),
+                "build cancelled (upstream stage failed)".into(),
+            ));
             continue;
         }
         let Some(toplevel) = ctx1.get_output::<String>(&build_id) else {
             build_failures.push((
                 host.clone(),
-                "build succeeded but produced no toplevel output".into(),
+                "internal: build completed but DAG context held no toplevel output \
+                 — likely a context-wiring bug, please report"
+                    .into(),
             ));
             continue;
         };
