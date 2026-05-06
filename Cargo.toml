@@ -17,19 +17,19 @@ members = [
 name = "consortium"
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "LGPL-2.1-or-later"
 repository = "https://github.com/olivecasazza/consortium"
 description = "A Rust rewrite of ClusterShell with Python bindings"
 
 [workspace.dependencies]
-consortium = { path = "crates/consortium", package = "consortium-crate", version = "0.1.0" }
-consortium-nix = { path = "crates/consortium-nix", version = "0.1.0" }
-consortium-ansible = { path = "crates/consortium-ansible", version = "0.1.0" }
-consortium-slurm = { path = "crates/consortium-slurm", version = "0.1.0" }
-consortium-ray = { path = "crates/consortium-ray", version = "0.1.0" }
-consortium-skypilot = { path = "crates/consortium-skypilot", version = "0.1.0" }
-consortium-fanout-sim = { path = "crates/consortium-fanout-sim", version = "0.1.0" }
+consortium = { path = "crates/consortium", package = "consortium-crate", version = "0.2.0" }
+consortium-nix = { path = "crates/consortium-nix", version = "0.2.0" }
+consortium-ansible = { path = "crates/consortium-ansible", version = "0.2.0" }
+consortium-slurm = { path = "crates/consortium-slurm", version = "0.2.0" }
+consortium-ray = { path = "crates/consortium-ray", version = "0.2.0" }
+consortium-skypilot = { path = "crates/consortium-skypilot", version = "0.2.0" }
+consortium-fanout-sim = { path = "crates/consortium-fanout-sim", version = "0.2.0" }
 pyo3 = { version = "0.22", features = ["extension-module"] }
 thiserror = "2"

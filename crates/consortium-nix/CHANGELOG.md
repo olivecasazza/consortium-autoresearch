@@ -1,5 +1,26 @@
 # Changelog
 
+## Bug Fixes
+
+- transient-vs-permanent error semantic + summary alignment
+- pre-populate pending nodes + allow transient retries
+- cascade deploy reports eval failures, not misleading "no output"
+
+## Features
+
+- parallelize builds with DAG executor ([#2](https://github.com/olivecasazza/consortium-autoresearch/pull/2))
+- add log-N closure-distribution primitive + sim testbed
+- builder + contention + event protocol + cli viz
+- LevelTreeFanOut strategy + claw default
+- random failures + orphan re-routing in level-tree
+- production wiring — NixCopyExecutor + cascade-copy bin
+- wire cascade primitive into deploy — peer-to-peer copy fan-out
+
+## Testing
+
+- tighten loose strategy assertions
+
+
 ## Features
 
 - add NixOS deployment (cast) with generic DAG executor
