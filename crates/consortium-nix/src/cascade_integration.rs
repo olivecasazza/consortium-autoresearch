@@ -23,12 +23,30 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use crate::cascade::{Cascade, CascadeNode, NetworkProfile, NodeId, NodeIdAlloc};
-use crate::cascade_events::{EventSink, NullSink};
+use crate::cascade_events::{CascadeEvent, EventSink, NullSink};
 use crate::cascade_executor::NixCopyExecutor;
 use crate::cascade_strategies::LevelTreeFanOut;
+
+/// Forwards every cascade event EXCEPT [`CascadeEvent::Started`] and
+/// [`CascadeEvent::Finished`]. Used by [`cascade_copy_grouped`] so each
+/// per-toplevel sub-cascade doesn't reset the renderer's total-node
+/// count or fire a premature "done" frame — the parent emits exactly
+/// one Started + Finished spanning all groups.
+struct DropStartFinish<'a>(&'a dyn EventSink);
+
+impl<'a> EventSink for DropStartFinish<'a> {
+    fn emit(&self, event: &CascadeEvent) {
+        match event {
+            CascadeEvent::Started { .. } | CascadeEvent::Finished { .. } => {
+                // Suppress — outer cascade_copy_grouped emits unified versions.
+            }
+            _ => self.0.emit(event),
+        }
+    }
+}
 
 /// Per-host input to the grouped cascade copy.
 #[derive(Debug, Clone)]
@@ -126,41 +144,74 @@ impl<'a> CascadeCopyConfig<'a> {
 /// which we don't gather for production deploys (would need an active
 /// bandwidth probe step). When that lands, swap the strategy here.
 pub fn cascade_copy_grouped(cfg: CascadeCopyConfig<'_>) -> CascadeCopyResult {
-    let mut result = CascadeCopyResult::default();
     if cfg.targets.is_empty() {
-        return result;
+        return CascadeCopyResult::default();
     }
 
-    // Group targets by their toplevel path. Stable iteration order so
-    // logs / live UI are deterministic across runs.
-    let mut groups: HashMap<String, Vec<CascadeCopyTarget>> = HashMap::new();
+    // Group targets by their toplevel path.
+    let mut groups_map: HashMap<String, Vec<CascadeCopyTarget>> = HashMap::new();
     for t in cfg.targets {
-        groups.entry(t.toplevel_path.clone()).or_default().push(t);
+        groups_map
+            .entry(t.toplevel_path.clone())
+            .or_default()
+            .push(t);
     }
+
+    // Allocate GLOBAL NodeIds across all groups so the renderer sees
+    // a single unified tree. NodeId(0) is the shared virtual seed
+    // (same across all groups — same physical box). Each target gets
+    // its own contiguous global NodeId, regardless of which toplevel
+    // group it belongs to. Without this, every per-group cascade
+    // would reuse NodeId(0)/NodeId(1)/... and the renderer collapses
+    // them into a single edge.
+    let mut alloc = NodeIdAlloc::new();
+    let global_seed = alloc.alloc();
+
+    // For each group: pair each target with its global NodeId.
+    let mut groups: Vec<(String, Vec<(CascadeCopyTarget, NodeId)>)> = Vec::new();
+    for (toplevel, targets) in groups_map {
+        let with_ids: Vec<(CascadeCopyTarget, NodeId)> =
+            targets.into_iter().map(|t| (t, alloc.alloc())).collect();
+        groups.push((toplevel, with_ids));
+    }
+
+    // Total node count for the unified Started event.
+    let n_total: u32 = groups.iter().map(|(_, g)| g.len() as u32).sum::<u32>() + 1;
 
     let strategy = LevelTreeFanOut::new(cfg.fanout);
     let null_sink = NullSink;
-    let events: &dyn EventSink = cfg.events.unwrap_or(&null_sink);
+    let user_events: &dyn EventSink = cfg.events.unwrap_or(&null_sink);
 
-    // Run each group in its own thread, all sharing the same event
-    // sink + strategy. thread::scope lets us pass borrowed refs in
-    // without needing 'static bounds.
+    // Emit ONE Started event for the whole grouped cascade. Per-group
+    // cascades' Started events get suppressed by DropStartFinish so
+    // they don't clobber the unified total_nodes count.
+    user_events.emit(&CascadeEvent::Started {
+        n_nodes: n_total,
+        seeded: vec![global_seed],
+        strategy: format!("LevelTreeFanOut(fanout={})", cfg.fanout),
+        at: SystemTime::now(),
+    });
+
+    let group_events = DropStartFinish(user_events);
+
     use std::sync::Mutex;
     let result_mtx = Mutex::new(CascadeCopyResult::default());
 
     std::thread::scope(|scope| {
-        for (toplevel, group) in groups {
+        for (toplevel, group_with_ids) in groups {
             let seed_addr = cfg.seed_addr.clone();
             let strategy_ref = &strategy;
             let result_ref = &result_mtx;
+            let events_ref: &dyn EventSink = &group_events;
             scope.spawn(move || {
                 let mut local = CascadeCopyResult::default();
-                run_one_group(
+                run_one_group_global(
                     &seed_addr,
+                    global_seed,
                     &toplevel,
-                    group,
+                    group_with_ids,
                     strategy_ref,
-                    events,
+                    events_ref,
                     cfg.timeout,
                     &mut local,
                 );
@@ -173,41 +224,57 @@ pub fn cascade_copy_grouped(cfg: CascadeCopyConfig<'_>) -> CascadeCopyResult {
         }
     });
 
-    result = result_mtx.into_inner().unwrap();
+    let result = result_mtx.into_inner().unwrap();
+
+    // Emit unified Finished. converged = seed + every host that copied;
+    // failed = unique hosts that didn't.
+    user_events.emit(&CascadeEvent::Finished {
+        converged: result.copied.len() + 1,
+        failed: result.failed.len(),
+        rounds: 0, // multi-cascade: meaningful per-group, not unified
+    });
+
     result
 }
 
-fn run_one_group(
+/// Run one per-toplevel cascade using GLOBAL NodeIds assigned by
+/// the parent [`cascade_copy_grouped`]. Each group cascade still has
+/// its own independent [`Cascade`] graph (one seed + its own targets),
+/// but the NodeIds are unique across all concurrent groups so the
+/// shared event sink/renderer sees a single unified tree.
+///
+/// The seed NodeId is the same `global_seed` across all groups —
+/// they all originate from the same physical box, and the renderer
+/// shows them as one shared root with each group's targets as
+/// children.
+fn run_one_group_global(
     seed_addr: &str,
+    global_seed: NodeId,
     toplevel: &str,
-    group: Vec<CascadeCopyTarget>,
+    group: Vec<(CascadeCopyTarget, NodeId)>,
     strategy: &LevelTreeFanOut,
     events: &dyn EventSink,
     timeout: Duration,
     result: &mut CascadeCopyResult,
 ) {
-    // Build NodeIds: seed at NodeId(0), targets at NodeId(1)..
-    let mut alloc = NodeIdAlloc::new();
-    let seed_id = alloc.alloc();
-
     let mut cascade_nodes: Vec<CascadeNode> =
-        vec![CascadeNode::new(seed_id, seed_addr.to_string())];
+        vec![CascadeNode::new(global_seed, seed_addr.to_string())];
     let mut addrs: HashMap<NodeId, String> = HashMap::new();
-    addrs.insert(seed_id, seed_addr.to_string());
+    addrs.insert(global_seed, seed_addr.to_string());
 
     let mut id_to_host: HashMap<NodeId, String> = HashMap::new();
 
-    for t in &group {
-        let id = alloc.alloc();
-        cascade_nodes.push(CascadeNode::new(id, t.ssh_addr.clone()));
-        addrs.insert(id, t.ssh_addr.clone());
-        id_to_host.insert(id, t.host_name.clone());
+    for (t, id) in &group {
+        cascade_nodes.push(CascadeNode::new(*id, t.ssh_addr.clone()));
+        addrs.insert(*id, t.ssh_addr.clone());
+        id_to_host.insert(*id, t.host_name.clone());
     }
 
     let mut seeded = HashSet::new();
-    seeded.insert(seed_id);
+    seeded.insert(global_seed);
 
-    let executor = NixCopyExecutor::new(addrs, toplevel.to_string(), seed_id).with_timeout(timeout);
+    let executor =
+        NixCopyExecutor::new(addrs, toplevel.to_string(), global_seed).with_timeout(timeout);
 
     let cascade_result = Cascade::new()
         .nodes(cascade_nodes)
@@ -218,19 +285,16 @@ fn run_one_group(
         .events(events)
         .run();
 
-    // Map NodeIds back to host names.
     for id in &cascade_result.converged {
+        if *id == global_seed {
+            continue;
+        }
         if let Some(host) = id_to_host.get(id) {
-            // The seed isn't a deploy target; skip it.
-            if *id != seed_id {
-                result.copied.push(host.clone());
-            }
+            result.copied.push(host.clone());
         }
     }
     if let Some(err) = cascade_result.failed {
         let msg = format!("{}", err);
-        // Dedupe affected nodes — a single subtree-aggregate can name
-        // the same host multiple times if it bubbled up across rounds.
         let mut seen = HashSet::new();
         for affected_id in err.affected_nodes() {
             if !seen.insert(affected_id) {
