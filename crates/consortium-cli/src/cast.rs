@@ -7,12 +7,15 @@
 //!   cast health                           # probe all builders
 //!   cast status --on hp[01-03]            # show current system versions
 
+use std::io;
 use std::path::PathBuf;
 use std::process;
 
 use clap::{Parser, Subcommand};
+use is_terminal::IsTerminal;
 
 use consortium::node_set::NodeSet;
+use consortium_cli::event_render::LiveTreeRenderer;
 use consortium_cli::output::{CliOutput, OutputArgs};
 use consortium_nix::config::{DeployAction, FleetConfig};
 use consortium_nix::health;
@@ -291,6 +294,27 @@ fn cmd_deploy(
         let seed_addr = std::env::var("USER")
             .map(|u| format!("{}@localhost", u))
             .unwrap_or_else(|_| "localhost".into());
+
+        // Wire up the nh-style live tree renderer for the cascade
+        // copy phase. Only when stdout is a TTY — otherwise the
+        // cursor-positioning escape codes garble pipes / CI logs.
+        // Color = true is safe since the TTY check already implies
+        // an interactive terminal that handles ANSI; users who need
+        // NO_COLOR can set the env var (console crate respects it).
+        let renderer = io::stdout().is_terminal().then(|| {
+            LiveTreeRenderer::new(true, None).with_header_lines(vec![
+                format!(
+                    "cast deploy --cascade || {} hosts || fanout: {}",
+                    targets.len(),
+                    cascade_fanout
+                ),
+                format!("Seed: {} || Action: {}", seed_addr, action),
+            ])
+        });
+        let event_sink = renderer
+            .as_ref()
+            .map(|r| r as &dyn consortium_nix::cascade_events::EventSink);
+
         consortium_nix::deploy_with_cascade(
             config,
             &targets,
@@ -299,7 +323,7 @@ fn cmd_deploy(
             use_builders,
             cascade_fanout,
             &seed_addr,
-            None, // event sink — deferred until LiveTreeRenderer wiring
+            event_sink,
         )?
     } else {
         consortium_nix::deploy(config, &targets, action, fanout, use_builders)?
