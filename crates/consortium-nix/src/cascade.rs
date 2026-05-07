@@ -895,15 +895,28 @@ pub fn run_cascade_with_events(
         .map(|n| n.id)
         .collect();
 
-    let failed = match root_errors.len() {
+    // Prune errors whose target eventually converged via retry.
+    // Per-round error buckets bubble up regardless of whether the
+    // target later succeeded — without pruning, a cascade that
+    // recovered via seed-fallback (round 1: peer-source SSH fail
+    // transient → round 2: seed-source success) still reports
+    // `failed = Some(...)` because the round-1 errors remain in
+    // root_errors. Filter them now: anything affecting only nodes
+    // in `has_closure` is no longer relevant.
+    let pruned_root: Vec<CascadeError> = root_errors
+        .into_iter()
+        .filter_map(|e| prune_converged(e, &has_closure))
+        .collect();
+
+    let failed = match pruned_root.len() {
         0 => None,
-        1 => Some(root_errors.into_iter().next().unwrap()),
+        1 => Some(pruned_root.into_iter().next().unwrap()),
         _ => Some(CascadeError::SubtreeAggregate {
             // synthetic root: NodeId(u32::MAX) signals "user / coordinator,
             // no real node corresponds." Strategies and tests should not
             // dereference this.
             node: NodeId(u32::MAX),
-            errors: root_errors,
+            errors: pruned_root,
         }),
     };
 
@@ -924,6 +937,49 @@ pub fn run_cascade_with_events(
         failed,
         rounds: round,
         round_durations,
+    }
+}
+
+/// Walk a `CascadeError` tree and drop any leaf error whose target
+/// eventually ended up in `has_closure` (i.e. the retry succeeded).
+/// Returns `None` if every leaf was pruned — the entire subtree was
+/// transient noise the cascade recovered from.
+///
+/// SubtreeAggregate with no surviving children collapses to None.
+/// SubtreeAggregate with one surviving child collapses to that child
+/// (single-error wrapper has no value).
+fn prune_converged(err: CascadeError, has_closure: &HashSet<NodeId>) -> Option<CascadeError> {
+    match err {
+        CascadeError::Copy { node, .. }
+        | CascadeError::SshHandshake { node, .. }
+        | CascadeError::Activation { node, .. } => {
+            if has_closure.contains(&node) {
+                None
+            } else {
+                Some(err)
+            }
+        }
+        CascadeError::Partitioned { tgt, .. } => {
+            if has_closure.contains(&tgt) {
+                None
+            } else {
+                Some(err)
+            }
+        }
+        CascadeError::SubtreeAggregate { node, errors } => {
+            let surviving: Vec<CascadeError> = errors
+                .into_iter()
+                .filter_map(|e| prune_converged(e, has_closure))
+                .collect();
+            match surviving.len() {
+                0 => None,
+                1 => Some(surviving.into_iter().next().unwrap()),
+                _ => Some(CascadeError::SubtreeAggregate {
+                    node,
+                    errors: surviving,
+                }),
+            }
+        }
     }
 }
 

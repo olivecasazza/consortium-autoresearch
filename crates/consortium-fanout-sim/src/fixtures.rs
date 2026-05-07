@@ -235,6 +235,14 @@ pub enum FailureSchedule {
     Explicit(HashMap<(u32, NodeId, NodeId), CascadeError>),
     /// Multiple failure schedules composed (any one matching = fail).
     All(Vec<FailureSchedule>),
+    /// Models a fleet where peer-to-peer SSH isn't configured but
+    /// seed → peer SSH works (the nixlab default: dev box has SSH to
+    /// every host, but cluster hosts don't trust each other's keys).
+    /// Every edge whose `src != seed` returns a transient
+    /// `CascadeError::Copy` mimicking real `Permission denied` /
+    /// `Host key verification failed` stderr — the cascade should
+    /// re-route those targets to seed-source on the next round.
+    PeerSshUnconfigured { seed: NodeId },
 }
 
 impl FailureSchedule {
@@ -298,6 +306,20 @@ impl FailureSchedule {
             FailureSchedule::All(schedules) => schedules
                 .iter()
                 .find_map(|s| s.failure_for(round, src, tgt)),
+            FailureSchedule::PeerSshUnconfigured { seed } => {
+                if src == *seed {
+                    None
+                } else {
+                    Some(CascadeError::Copy {
+                        node: tgt,
+                        stderr: format!(
+                            "Permission denied (publickey).\n\
+                             Host key verification failed.\n\
+                             (simulated: peer→peer SSH not configured between {src} and {tgt})"
+                        ),
+                    })
+                }
+            }
         }
     }
 }
