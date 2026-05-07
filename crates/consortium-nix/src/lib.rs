@@ -44,6 +44,7 @@ use consortium::dag::{DagContext, DagReport, ErrorPolicy, StageBuilder, TaskId};
 
 use crate::cascade_events::EventSink;
 use crate::cascade_integration::{cascade_copy_grouped, CascadeCopyConfig, CascadeCopyTarget};
+use crate::copy::parallel_diff_copy;
 
 /// Run the full deployment pipeline using the DAG executor.
 ///
@@ -266,13 +267,92 @@ pub fn deploy_with_cascade(
         });
     }
 
-    // Cascade phase: group by toplevel, fan-out per group.
-    let mut cfg = CascadeCopyConfig::new(seed_addr.to_string(), targets_for_cascade.clone())
-        .fanout(cascade_fanout);
-    if let Some(sink) = event_sink {
-        cfg = cfg.events(sink);
+    // Cascade phase — TWO patterns running in sequence:
+    //
+    //   1. SHARED-BASE CASCADE (peer-to-peer fan-out tree):
+    //      Pick the most-frequent toplevel as the "carrier". Cascade
+    //      its closure to ALL hosts via the fan-out tree, even hosts
+    //      whose actual toplevel differs. Once this completes, every
+    //      host has the carrier's full closure — which overlaps ~95%
+    //      with every other per-host toplevel (same nixpkgs base,
+    //      same kernel, same userspace). Tree shape:
+    //
+    //          seed → host_0 → host_1, host_2
+    //                          │       └── host_3
+    //                          └── host_4
+    //
+    //   2. PER-HOST DIFF (parallel direct copy):
+    //      For each host whose actual toplevel ≠ carrier, run a
+    //      direct `nix copy` of that toplevel from seed. nix's
+    //      content-addressed store sees the carrier's substrate
+    //      already on the host and only transfers the per-host
+    //      tail (typically <100MB). These run in parallel.
+    //
+    // Together: the big shared substrate goes peer-to-peer (log-N
+    // rounds) and per-host tails go direct (single round, parallel).
+    // For homogeneous fleets (all hosts same toplevel), step 2 is
+    // a no-op and we get pure cascade. For heterogeneous fleets
+    // (every host different) we get the fan-out tree on the shared
+    // substrate AND parallel diffs.
+    let cascade_result;
+    let mut copy_failures_extra: Vec<(String, String)> = Vec::new();
+
+    if !targets_for_cascade.is_empty() {
+        // Pick carrier = most-frequent toplevel (savings = N×(diff_size)
+        // for the N hosts that don't need a diff copy after cascade).
+        let mut counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+        for t in &targets_for_cascade {
+            *counts.entry(t.toplevel_path.as_str()).or_insert(0) += 1;
+        }
+        let carrier_toplevel: String = counts
+            .into_iter()
+            .max_by_key(|(_, n)| *n)
+            .map(|(p, _)| p.to_string())
+            .unwrap_or_else(|| targets_for_cascade[0].toplevel_path.clone());
+
+        // All hosts share the carrier as their cascade payload. Forcing
+        // a single toplevel_path collapses cascade_copy_grouped's
+        // group-by-toplevel into ONE big group → fan-out tree of N
+        // hosts, not N separate 1-target cascades.
+        let cascade_carrier_targets: Vec<CascadeCopyTarget> = targets_for_cascade
+            .iter()
+            .map(|t| CascadeCopyTarget {
+                host_name: t.host_name.clone(),
+                ssh_addr: t.ssh_addr.clone(),
+                toplevel_path: carrier_toplevel.clone(),
+            })
+            .collect();
+
+        let mut cfg = CascadeCopyConfig::new(seed_addr.to_string(), cascade_carrier_targets)
+            .fanout(cascade_fanout);
+        if let Some(sink) = event_sink {
+            cfg = cfg.events(sink);
+        }
+        cascade_result = cascade_copy_grouped(cfg);
+
+        // Per-host diff phase: hosts whose actual toplevel differs from
+        // the carrier need a direct copy of their actual toplevel. nix
+        // copy will only send the missing paths since the carrier's
+        // substrate already lives on the host. Run in parallel.
+        let needs_diff: Vec<&CascadeCopyTarget> = targets_for_cascade
+            .iter()
+            .filter(|t| t.toplevel_path != carrier_toplevel)
+            .filter(|t| cascade_result.copied.iter().any(|h| h == &t.host_name))
+            .collect();
+
+        if !needs_diff.is_empty() {
+            eprintln!(
+                "cascade: shared-base done; {} host(s) need per-host diff copy",
+                needs_diff.len()
+            );
+            let diff_results = parallel_diff_copy(&needs_diff);
+            for (host, err) in diff_results {
+                copy_failures_extra.push((host, err));
+            }
+        }
+    } else {
+        cascade_result = crate::cascade_integration::CascadeCopyResult::default();
     }
-    let cascade_result = cascade_copy_grouped(cfg);
 
     // Build a synthetic Phase-2 DagContext that pre-loads the cascade
     // results into "copy:{host}" outputs so NixActivateTask can read
@@ -282,12 +362,14 @@ pub fn deploy_with_cascade(
     ctx2.set_state("action", action);
 
     // Carry the toplevels forward so activate can find them. Hosts
-    // whose copy failed are excluded — they won't be in the activate
-    // resource list.
+    // whose carrier-cascade OR per-host diff failed are excluded —
+    // they can't be activated (don't have their actual toplevel yet).
     let copied_set: std::collections::HashSet<&String> = cascade_result.copied.iter().collect();
+    let diff_failed: std::collections::HashSet<&String> =
+        copy_failures_extra.iter().map(|(h, _)| h).collect();
     let mut activate_targets: Vec<String> = Vec::new();
     for t in &targets_for_cascade {
-        if copied_set.contains(&t.host_name) {
+        if copied_set.contains(&t.host_name) && !diff_failed.contains(&t.host_name) {
             ctx2.set_output(
                 TaskId(format!("copy:{}", t.host_name)),
                 t.toplevel_path.clone(),
@@ -341,6 +423,8 @@ pub fn deploy_with_cascade(
         .into_iter()
         .map(|(h, e)| (h, e))
         .collect();
+    // Fold in per-host diff-copy failures from the second cascade phase.
+    copy_failures.extend(copy_failures_extra);
 
     // Defensive: any host that built successfully but is in neither
     // `copied` nor `failed` was silently dropped by the cascade

@@ -2,9 +2,38 @@
 
 use std::collections::HashMap;
 use std::process::Command;
+use std::sync::Mutex;
+use std::thread;
 
+use crate::cascade_integration::CascadeCopyTarget;
 use crate::config::DeploymentPlan;
 use crate::error::{NixError, Result};
+
+/// Run a `nix copy` per target in parallel, returning per-host failures.
+/// Used by the cascade's per-host diff phase: after the shared substrate
+/// has been distributed via the fan-out tree, each host that needs a
+/// different actual toplevel runs its own `nix copy` from seed. nix's
+/// content-addressed store ensures only the missing tail is transferred,
+/// so these copies are tiny.
+pub fn parallel_diff_copy(targets: &[&CascadeCopyTarget]) -> Vec<(String, String)> {
+    let failures: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+    thread::scope(|scope| {
+        for t in targets {
+            let target = *t;
+            let failures_ref = &failures;
+            scope.spawn(move || {
+                let store_uri = format!("ssh-ng://{}", target.ssh_addr);
+                if let Err(e) = copy_closure(&target.toplevel_path, &store_uri) {
+                    failures_ref
+                        .lock()
+                        .unwrap()
+                        .push((target.host_name.clone(), format!("{e}")));
+                }
+            });
+        }
+    });
+    failures.into_inner().unwrap()
+}
 
 /// Copy results keyed by hostname.
 pub struct CopyResults {
