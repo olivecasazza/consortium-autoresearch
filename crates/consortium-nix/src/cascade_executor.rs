@@ -158,11 +158,12 @@ impl NixCopyExecutor {
         };
 
         let elapsed = started.elapsed();
+        let src_is_seed = src == self.seed;
         match cmd_result {
             Ok(output) if output.status.success() => Ok(elapsed),
             Ok(output) => {
                 let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                Err(classify_copy_error(tgt, src, &stderr))
+                Err(classify_copy_error(tgt, src, src_is_seed, &stderr))
             }
             Err(io_err) => Err(CascadeError::Copy {
                 node: tgt,
@@ -205,24 +206,38 @@ impl RoundExecutor for NixCopyExecutor {
 /// Map a non-zero `nix copy` stderr to the right `CascadeError` variant.
 /// Permanent vs transient distinction matters for orphan re-routing
 /// (see cascade.rs's `is_transient()` discussion).
-fn classify_copy_error(tgt: NodeId, src: NodeId, stderr: &str) -> CascadeError {
+///
+/// Crucially distinguishes seed-source from peer-source failures:
+///
+/// - **Seed source** (the dev box has authoritative SSH config to all
+///   hosts): an SSH handshake failure means the target is genuinely
+///   unreachable → permanent.
+/// - **Peer source** (one cluster host trying to push to another): an
+///   SSH failure usually means peer-to-peer SSH isn't configured (e.g.
+///   in nixlab, Mac Minis don't trust each other's host keys), NOT
+///   that the target is dead. Mark transient so the cascade retries
+///   the same target from a different source (typically the seed).
+fn classify_copy_error(tgt: NodeId, src: NodeId, src_is_seed: bool, stderr: &str) -> CascadeError {
     let lower = stderr.to_lowercase();
-    if lower.contains("connection refused")
+    let is_ssh_error = lower.contains("connection refused")
         || lower.contains("connection timed out")
         || lower.contains("no route to host")
         || lower.contains("permission denied")
-        || lower.contains("host key verification failed")
-    {
-        // Target host is permanently unreachable — orphan re-routing
-        // should kick in for any descendants in level-tree.
+        || lower.contains("host key verification failed");
+
+    if is_ssh_error && src_is_seed {
+        // Seed (authoritative SSH config) couldn't reach tgt → tgt
+        // is genuinely unreachable. Mark permanent so orphan re-
+        // routing skips its subtree.
         CascadeError::SshHandshake {
             node: tgt,
             parent: src,
         }
     } else {
-        // Default to transient — could be source-side bandwidth, a
-        // flaky relay, or a substituter being slow. Retry from an
-        // alternate source on the next round may succeed.
+        // Either: a peer source couldn't reach tgt (likely peer→peer
+        // SSH not configured) — let cascade retry from another source.
+        // Or: a non-SSH error (substituter slow, bandwidth glitch, etc.)
+        // which has always been transient.
         CascadeError::Copy {
             node: tgt,
             stderr: stderr.lines().take(5).collect::<Vec<_>>().join("\n"),
@@ -259,7 +274,9 @@ mod tests {
     }
 
     #[test]
-    fn classify_known_permanent_errors() {
+    fn classify_seed_ssh_errors_as_permanent() {
+        // SSH errors from the SEED (authoritative SSH config) mean the
+        // target is genuinely unreachable.
         let perm_cases = [
             "ssh: connect to host hp01 port 22: Connection refused",
             "ssh: connect to host hp01 port 22: Connection timed out",
@@ -268,27 +285,50 @@ mod tests {
             "ssh: connect to host hp01 port 22: No route to host",
         ];
         for stderr in perm_cases {
-            let err = classify_copy_error(NodeId(1), NodeId(0), stderr);
+            let err = classify_copy_error(NodeId(1), NodeId(0), true, stderr);
             assert!(
                 matches!(err, CascadeError::SshHandshake { .. }),
-                "expected SshHandshake for stderr={stderr:?}, got {err:?}"
+                "expected SshHandshake (seed-source SSH error) for stderr={stderr:?}, got {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn classify_peer_ssh_errors_as_transient() {
+        // SSH errors from a PEER source (e.g. nixlab Mac Mini → another
+        // Mac Mini, no host keys configured) should be transient — the
+        // cascade should retry from a different source rather than
+        // marking the target dead.
+        let peer_ssh_cases = [
+            "ssh: connect to host mm03 port 22: Connection refused",
+            "Permission denied (publickey).",
+            "Host key verification failed.",
+        ];
+        for stderr in peer_ssh_cases {
+            let err = classify_copy_error(NodeId(2), NodeId(1), false, stderr);
+            assert!(
+                matches!(err, CascadeError::Copy { .. }),
+                "expected Copy (transient — peer SSH not configured) for stderr={stderr:?}, got {err:?}"
             );
         }
     }
 
     #[test]
     fn classify_transient_errors_default_to_copy() {
+        // Non-SSH errors are always transient regardless of source.
         let cases = [
             "error: writing to file: No space left on device",
             "warning: substituter 'https://cache.nixos.org' returned HTTP 503",
             "some random stderr nobody categorized",
         ];
-        for stderr in cases {
-            let err = classify_copy_error(NodeId(1), NodeId(0), stderr);
-            assert!(
-                matches!(err, CascadeError::Copy { .. }),
-                "expected Copy (transient) for stderr={stderr:?}, got {err:?}"
-            );
+        for src_is_seed in [true, false] {
+            for stderr in cases {
+                let err = classify_copy_error(NodeId(1), NodeId(0), src_is_seed, stderr);
+                assert!(
+                    matches!(err, CascadeError::Copy { .. }),
+                    "expected Copy (transient) for stderr={stderr:?} src_is_seed={src_is_seed}, got {err:?}"
+                );
+            }
         }
     }
 }

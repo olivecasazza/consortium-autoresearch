@@ -341,31 +341,55 @@ impl CascadeStrategy for LevelTreeFanOut {
             // Try the heap ancestor chain first (preserves the
             // canonical level-by-level tree shape).
             //
-            // We do NOT filter by `state.attempted` for transient
-            // failures — that would block retries. After (anc, tgt)
-            // failed in a previous round (with a Copy/transient
-            // error), the same edge may succeed on the next attempt.
-            // Permanent failures get filtered via `state.failed_nodes`
+            // We DO filter by `state.attempted` here — once a
+            // (src, tgt) edge has been tried, schedule a different
+            // src next time even if the failure was transient. This
+            // matters for peer-source SSH failures (e.g. nixlab Mac
+            // Minis lacking SSH keys to each other): the edge
+            // wouldn't succeed on retry, so route around it. The
+            // last-ditch fallback below DOES retry attempted edges
+            // when no fresh source remains, so genuinely transient
+            // failures still get a second chance.
+            //
+            // Permanent failures filter via `state.failed_nodes`
             // (populated by the coordinator on non-transient errors).
             let mut chosen: Option<NodeId> = None;
             let heap_anc = self.alive_ancestor(tgt, state);
             if let Some(anc) = heap_anc {
-                if !net.is_partitioned(anc, tgt) {
+                if !net.is_partitioned(anc, tgt) && !state.attempted.contains(&(anc, tgt)) {
                     chosen = Some(anc);
                 }
             }
 
-            // Fallback: if heap path unusable (no alive ancestor or
-            // edge partitioned), pick ANY alive source. Skip the
-            // wait-not-ready case (heap_anc.is_none()) — those need
-            // to wait for next round, not short-circuit to root.
+            // Fallback: if heap path unusable (no alive ancestor,
+            // edge partitioned, or already-attempted), pick ANY
+            // alive source whose edge to tgt hasn't been attempted.
+            // Typical case: peer-source failed in round N → round
+            // N+1 picks the seed instead.
             if chosen.is_none() && heap_anc.is_some() {
                 for &src in &alive_sources {
                     if net.is_partitioned(src, tgt) {
                         continue;
                     }
+                    if state.attempted.contains(&(src, tgt)) {
+                        continue;
+                    }
                     chosen = Some(src);
                     break;
+                }
+            }
+
+            // Last-ditch: every src has tried tgt, but tgt isn't in
+            // failed_nodes (so error was transient). Retry the heap
+            // ancestor — it might succeed this round if the failure
+            // really was a glitch (substituter slow, network blip).
+            // Without this, transient failures permanently strand
+            // the target — regression of the original semantics.
+            if chosen.is_none() {
+                if let Some(anc) = heap_anc {
+                    if !net.is_partitioned(anc, tgt) {
+                        chosen = Some(anc);
+                    }
                 }
             }
 

@@ -911,19 +911,19 @@ impl EventSink for LiveTreeRenderer {
     fn emit(&self, event: &CascadeEvent) {
         // Always update the in-memory tree.
         self.accumulator.emit(event);
-        // Repaint on round boundaries + final tick. Per-edge events
-        // accumulate silently — keeps redraw rate manageable. Following
-        // nom's pattern: erase-in-place at frame time, no alt screen.
-        // Finished is forced (final frame must always show).
-        // PlanComputed/RoundCompleted go through the 60ms gate.
+        // Repaint policy: force on Started (first frame must appear
+        // immediately) and Finished (final frame must always show).
+        // Every other event paints through the 60ms throttle gate so
+        // long rounds (e.g. cascading thousands of store paths) show
+        // mid-flight progress as edges flip from ⏸ → ⏵ → ✔, instead
+        // of staying static until RoundCompleted.
         match event {
-            CascadeEvent::Finished { .. } => {
-                self.repaint(true); // force — final frame must display
+            CascadeEvent::Started { .. } | CascadeEvent::Finished { .. } => {
+                self.repaint(true);
             }
-            CascadeEvent::PlanComputed { .. } | CascadeEvent::RoundCompleted { .. } => {
+            _ => {
                 self.repaint(false);
             }
-            _ => {}
         }
     }
 }
