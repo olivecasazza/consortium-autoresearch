@@ -336,11 +336,30 @@ pub fn deploy_with_cascade(
         .cloned()
         .collect();
 
-    let copy_failures: Vec<(String, String)> = cascade_result
+    let mut copy_failures: Vec<(String, String)> = cascade_result
         .failed
         .into_iter()
         .map(|(h, e)| (h, e))
         .collect();
+
+    // Defensive: any host that built successfully but is in neither
+    // `copied` nor `failed` was silently dropped by the cascade
+    // (a strategy bug — e.g. dense-id assumption violated, or a
+    // group that converged without attempting its target). Mark
+    // them as failures explicitly so the report is honest.
+    let copied_set: std::collections::HashSet<String> =
+        cascade_result.copied.iter().cloned().collect();
+    let failed_set: std::collections::HashSet<String> =
+        copy_failures.iter().map(|(h, _)| h.clone()).collect();
+    for t in &targets_for_cascade {
+        if !copied_set.contains(&t.host_name) && !failed_set.contains(&t.host_name) {
+            copy_failures.push((
+                t.host_name.clone(),
+                "cascade did not attempt this host (strategy halted without planning the edge)"
+                    .to_string(),
+            ));
+        }
+    }
 
     Ok(DeployReport {
         built,
