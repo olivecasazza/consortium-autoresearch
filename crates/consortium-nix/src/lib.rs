@@ -30,6 +30,7 @@ pub mod cascade_executor;
 pub mod cascade_integration;
 pub mod cascade_strategies;
 pub mod cascade_trace;
+pub mod closure_introspect;
 pub mod config;
 pub mod copy;
 pub mod error;
@@ -43,7 +44,10 @@ pub use error::{NixError, Result};
 use consortium::dag::{DagContext, DagReport, ErrorPolicy, StageBuilder, TaskId};
 
 use crate::cascade_events::EventSink;
-use crate::cascade_integration::{cascade_copy_grouped, CascadeCopyConfig, CascadeCopyTarget};
+use crate::cascade_integration::{
+    cascade_copy_grouped, cascade_copy_unified, CascadeCopyConfig, CascadeCopyTarget,
+};
+use crate::closure_introspect::shared_paths;
 use crate::copy::parallel_diff_copy;
 
 /// Run the full deployment pipeline using the DAG executor.
@@ -269,80 +273,106 @@ pub fn deploy_with_cascade(
 
     // Cascade phase — TWO patterns running in sequence:
     //
-    //   1. SHARED-BASE CASCADE (peer-to-peer fan-out tree):
-    //      Pick the most-frequent toplevel as the "carrier". Cascade
-    //      its closure to ALL hosts via the fan-out tree, even hosts
-    //      whose actual toplevel differs. Once this completes, every
-    //      host has the carrier's full closure — which overlaps ~95%
-    //      with every other per-host toplevel (same nixpkgs base,
-    //      same kernel, same userspace). Tree shape:
-    //
-    //          seed → host_0 → host_1, host_2
-    //                          │       └── host_3
-    //                          └── host_4
+    //   1. CLOSURE-INTERSECTION CASCADE (peer-to-peer fan-out tree):
+    //      Compute the SET of store paths every host's toplevel
+    //      depends on — the closure intersection. These paths are
+    //      needed by every host regardless of its individual toplevel
+    //      (shared nixpkgs, kernel, userspace). Cascade JUST those
+    //      paths via the fan-out tree, sending zero host-specific
+    //      bytes.
     //
     //   2. PER-HOST DIFF (parallel direct copy):
-    //      For each host whose actual toplevel ≠ carrier, run a
-    //      direct `nix copy` of that toplevel from seed. nix's
-    //      content-addressed store sees the carrier's substrate
-    //      already on the host and only transfers the per-host
-    //      tail (typically <100MB). These run in parallel.
+    //      Each host pulls its actual per-host toplevel directly
+    //      from seed. nix's content-addressed store sees the shared
+    //      substrate already on the host and only transfers the
+    //      per-host tail. These run in parallel.
     //
-    // Together: the big shared substrate goes peer-to-peer (log-N
-    // rounds) and per-host tails go direct (single round, parallel).
-    // For homogeneous fleets (all hosts same toplevel), step 2 is
-    // a no-op and we get pure cascade. For heterogeneous fleets
-    // (every host different) we get the fan-out tree on the shared
-    // substrate AND parallel diffs.
+    // Fallback: if closure introspection fails (nix not on PATH, or
+    // toplevels not in the local store) we fall back to picking the
+    // most-frequent toplevel as a "carrier" and cascading IT instead.
+    // Slightly less efficient (sends carrier-specific bits to every
+    // host) but still gets fan-out for the substrate that overlaps.
     let cascade_result;
     let mut copy_failures_extra: Vec<(String, String)> = Vec::new();
 
     if !targets_for_cascade.is_empty() {
-        // Pick carrier = most-frequent toplevel (savings = N×(diff_size)
-        // for the N hosts that don't need a diff copy after cascade).
-        let mut counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
-        for t in &targets_for_cascade {
-            *counts.entry(t.toplevel_path.as_str()).or_insert(0) += 1;
-        }
-        let carrier_toplevel: String = counts
-            .into_iter()
-            .max_by_key(|(_, n)| *n)
-            .map(|(p, _)| p.to_string())
-            .unwrap_or_else(|| targets_for_cascade[0].toplevel_path.clone());
-
-        // All hosts share the carrier as their cascade payload. Forcing
-        // a single toplevel_path collapses cascade_copy_grouped's
-        // group-by-toplevel into ONE big group → fan-out tree of N
-        // hosts, not N separate 1-target cascades.
-        let cascade_carrier_targets: Vec<CascadeCopyTarget> = targets_for_cascade
+        let toplevels: Vec<String> = targets_for_cascade
             .iter()
-            .map(|t| CascadeCopyTarget {
-                host_name: t.host_name.clone(),
-                ssh_addr: t.ssh_addr.clone(),
-                toplevel_path: carrier_toplevel.clone(),
-            })
+            .map(|t| t.toplevel_path.clone())
             .collect();
 
-        let mut cfg = CascadeCopyConfig::new(seed_addr.to_string(), cascade_carrier_targets)
-            .fanout(cascade_fanout);
-        if let Some(sink) = event_sink {
-            cfg = cfg.events(sink);
-        }
-        cascade_result = cascade_copy_grouped(cfg);
+        match shared_paths(&toplevels) {
+            Ok(paths) if !paths.is_empty() => {
+                eprintln!(
+                    "cascade: closure intersection = {} shared paths across {} toplevels",
+                    paths.len(),
+                    toplevels.len(),
+                );
+                cascade_result = cascade_copy_unified(
+                    seed_addr,
+                    &targets_for_cascade,
+                    paths,
+                    cascade_fanout,
+                    std::time::Duration::from_secs(300),
+                    event_sink,
+                );
+            }
+            other => {
+                if let Err(e) = other {
+                    eprintln!(
+                        "cascade: closure introspection failed ({e}); falling back to carrier toplevel"
+                    );
+                } else {
+                    eprintln!(
+                        "cascade: closure intersection empty; falling back to carrier toplevel"
+                    );
+                }
+                let mut counts: std::collections::HashMap<&str, usize> =
+                    std::collections::HashMap::new();
+                for t in &targets_for_cascade {
+                    *counts.entry(t.toplevel_path.as_str()).or_insert(0) += 1;
+                }
+                let carrier_toplevel: String = counts
+                    .into_iter()
+                    .max_by_key(|(_, n)| *n)
+                    .map(|(p, _)| p.to_string())
+                    .unwrap_or_else(|| targets_for_cascade[0].toplevel_path.clone());
 
-        // Per-host diff phase: hosts whose actual toplevel differs from
-        // the carrier need a direct copy of their actual toplevel. nix
-        // copy will only send the missing paths since the carrier's
-        // substrate already lives on the host. Run in parallel.
+                let cascade_carrier_targets: Vec<CascadeCopyTarget> = targets_for_cascade
+                    .iter()
+                    .map(|t| CascadeCopyTarget {
+                        host_name: t.host_name.clone(),
+                        ssh_addr: t.ssh_addr.clone(),
+                        toplevel_path: carrier_toplevel.clone(),
+                    })
+                    .collect();
+
+                let mut cfg =
+                    CascadeCopyConfig::new(seed_addr.to_string(), cascade_carrier_targets)
+                        .fanout(cascade_fanout);
+                if let Some(sink) = event_sink {
+                    cfg = cfg.events(sink);
+                }
+                cascade_result = cascade_copy_grouped(cfg);
+            }
+        }
+
+        // Per-host diff phase: every host that received the cascade
+        // payload now needs its actual per-host toplevel pulled from
+        // seed. nix copy only sends the missing paths (per-host tail)
+        // since the shared substrate is already on the host. For
+        // closure-intersection this means every host gets a diff
+        // copy; for the carrier-toplevel fallback the host whose
+        // toplevel == carrier already has its full closure but the
+        // direct copy is a fast no-op there.
         let needs_diff: Vec<&CascadeCopyTarget> = targets_for_cascade
             .iter()
-            .filter(|t| t.toplevel_path != carrier_toplevel)
             .filter(|t| cascade_result.copied.iter().any(|h| h == &t.host_name))
             .collect();
 
         if !needs_diff.is_empty() {
             eprintln!(
-                "cascade: shared-base done; {} host(s) need per-host diff copy",
+                "cascade: shared-substrate done; {} host(s) need per-host diff copy",
                 needs_diff.len()
             );
             let diff_results = parallel_diff_copy(&needs_diff);

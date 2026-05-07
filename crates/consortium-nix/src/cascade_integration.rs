@@ -333,6 +333,123 @@ pub fn cascade_copy_grouped(cfg: CascadeCopyConfig<'_>) -> CascadeCopyResult {
     result
 }
 
+/// Run a single cascade that distributes a multi-path payload (e.g.
+/// the closure intersection of every host's toplevel) to every host
+/// in `targets` via the fan-out tree.
+///
+/// Differs from [`cascade_copy_grouped`]: there's no group-by-toplevel
+/// step — every target is in ONE cascade, and the payload is passed
+/// explicitly. Use this for closure-intersection cascades where the
+/// payload is computed upstream from many heterogeneous toplevels.
+///
+/// The per-target `toplevel_path` field is ignored for routing — only
+/// `host_name` and `ssh_addr` matter here. (We keep the type for API
+/// parallelism with the grouped variant.)
+pub fn cascade_copy_unified(
+    seed_addr: &str,
+    targets: &[CascadeCopyTarget],
+    payload_paths: Vec<String>,
+    fanout: u32,
+    timeout: Duration,
+    events: Option<&dyn EventSink>,
+) -> CascadeCopyResult {
+    if targets.is_empty() || payload_paths.is_empty() {
+        return CascadeCopyResult::default();
+    }
+
+    // Allocate dense local NodeIds. NodeId(0)=seed; NodeId(1+i)=target[i].
+    let mut alloc = NodeIdAlloc::new();
+    let local_seed = alloc.alloc();
+
+    let mut cascade_nodes: Vec<CascadeNode> =
+        vec![CascadeNode::new(local_seed, seed_addr.to_string())];
+    let mut addrs: HashMap<NodeId, String> = HashMap::new();
+    addrs.insert(local_seed, seed_addr.to_string());
+
+    let mut local_to_host: HashMap<NodeId, String> = HashMap::new();
+    let mut local_to_global: HashMap<NodeId, NodeId> = HashMap::new();
+    local_to_global.insert(local_seed, local_seed);
+
+    for target in targets {
+        let local_id = alloc.alloc();
+        cascade_nodes.push(CascadeNode::new(local_id, target.ssh_addr.clone()));
+        addrs.insert(local_id, target.ssh_addr.clone());
+        local_to_host.insert(local_id, target.host_name.clone());
+        // Identity mapping — unified cascade is a single tree, no
+        // per-group remapping needed. We still wrap the sink (below)
+        // to suppress spurious Started/Finished events from the inner
+        // Cascade (the caller emits them).
+        local_to_global.insert(local_id, local_id);
+    }
+
+    let mut seeded = HashSet::new();
+    seeded.insert(local_seed);
+
+    let null_sink = NullSink;
+    let user_events: &dyn EventSink = events.unwrap_or(&null_sink);
+
+    // Emit unified Started so the renderer sets total = N+1.
+    user_events.emit(&CascadeEvent::Started {
+        n_nodes: targets.len() as u32 + 1,
+        seeded: vec![local_seed],
+        strategy: format!(
+            "LevelTreeFanOut(fanout={fanout}) [unified, {} paths]",
+            payload_paths.len()
+        ),
+        at: SystemTime::now(),
+    });
+
+    let executor =
+        NixCopyExecutor::new_multi(addrs, payload_paths, local_seed).with_timeout(timeout);
+
+    // Wrap the user's sink to suppress the inner cascade's
+    // Started/Finished — we just emitted the unified pair.
+    let sink = RemappingSink {
+        inner: user_events,
+        local_to_global,
+    };
+
+    let strategy = LevelTreeFanOut::new(fanout);
+    let cascade_result = Cascade::new()
+        .nodes(cascade_nodes)
+        .seeded(seeded)
+        .network(NetworkProfile::default())
+        .strategy(&strategy)
+        .executor(&executor)
+        .events(&sink)
+        .run();
+
+    let mut result = CascadeCopyResult::default();
+    for id in &cascade_result.converged {
+        if *id == local_seed {
+            continue;
+        }
+        if let Some(host) = local_to_host.get(id) {
+            result.copied.push(host.clone());
+        }
+    }
+    if let Some(err) = cascade_result.failed {
+        let msg = format!("{}", err);
+        let mut seen = HashSet::new();
+        for affected_id in err.affected_nodes() {
+            if !seen.insert(affected_id) {
+                continue;
+            }
+            if let Some(host) = local_to_host.get(&affected_id) {
+                result.failed.insert(host.clone(), msg.clone());
+            }
+        }
+    }
+
+    user_events.emit(&CascadeEvent::Finished {
+        converged: result.copied.len() + 1,
+        failed: result.failed.len(),
+        rounds: cascade_result.rounds,
+    });
+
+    result
+}
+
 /// Run one per-toplevel cascade. Inside the cascade, NodeIds are dense
 /// (seed=0, targets=1..k) so [`LevelTreeFanOut`]'s heap-tree math and
 /// `0..n_nodes` iteration both work. At the event-sink boundary we

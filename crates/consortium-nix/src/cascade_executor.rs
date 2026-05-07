@@ -46,8 +46,11 @@ pub struct NixCopyExecutor {
     /// Seed node also has an entry here for symmetry, even though
     /// edges originating from it run locally.
     pub addrs: HashMap<NodeId, String>,
-    /// The store path being distributed, e.g. `/nix/store/xxx-foo-1.0`.
-    pub store_path: String,
+    /// Store paths being distributed. Single-path cascade carries one
+    /// toplevel (e.g. `/nix/store/xxx-foo-1.0`); multi-path cascade
+    /// carries the closure-intersection of multiple toplevels — `nix
+    /// copy` accepts an arbitrary list of positional store paths.
+    pub store_paths: Vec<String>,
     /// NodeId of the seed — edges originating from it run via local
     /// `nix copy`; all other src edges run via `ssh <src> 'nix copy …'`.
     pub seed: NodeId,
@@ -58,6 +61,8 @@ pub struct NixCopyExecutor {
 }
 
 impl NixCopyExecutor {
+    /// Construct a single-path executor (back-compat: the original
+    /// shape, used by per-toplevel cascades).
     pub fn new(
         addrs: HashMap<NodeId, String>,
         store_path: impl Into<String>,
@@ -65,7 +70,24 @@ impl NixCopyExecutor {
     ) -> Self {
         Self {
             addrs,
-            store_path: store_path.into(),
+            store_paths: vec![store_path.into()],
+            seed,
+            timeout: Duration::from_secs(300),
+        }
+    }
+
+    /// Construct a multi-path executor — distributes the union of
+    /// `store_paths` in one cascade. Used by closure-intersection
+    /// cascades where the payload is the shared substrate across
+    /// many heterogeneous toplevels.
+    pub fn new_multi(
+        addrs: HashMap<NodeId, String>,
+        store_paths: Vec<String>,
+        seed: NodeId,
+    ) -> Self {
+        Self {
+            addrs,
+            store_paths,
             seed,
             timeout: Duration::from_secs(300),
         }
@@ -90,33 +112,39 @@ impl NixCopyExecutor {
         };
         let store_uri = format!("ssh-ng://{tgt_addr}");
 
+        if self.store_paths.is_empty() {
+            return Err(CascadeError::Copy {
+                node: tgt,
+                stderr: "NixCopyExecutor.store_paths is empty — nothing to copy".into(),
+            });
+        }
+
         let started = Instant::now();
         let cmd_result = if src == self.seed {
-            // Local nix copy from the seed.
-            Command::new("nix")
-                .args([
-                    "copy",
-                    "--no-check-sigs",
-                    "--to",
-                    &store_uri,
-                    &self.store_path,
-                ])
-                .output()
+            // Local nix copy from the seed — pass every payload path
+            // as a positional arg.
+            let mut cmd = Command::new("nix");
+            cmd.args(["copy", "--no-check-sigs", "--to", &store_uri]);
+            for p in &self.store_paths {
+                cmd.arg(p);
+            }
+            cmd.output()
         } else {
-            // SSH into src and have it run nix copy.
+            // SSH into src and have it run nix copy with every payload
+            // path. Each path quoted so spaces (rare) don't break
+            // remote shell parsing.
             let Some(src_addr) = self.addrs.get(&src) else {
                 return Err(CascadeError::Copy {
                     node: tgt,
                     stderr: format!("no SSH address registered for src {src}"),
                 });
             };
-            // Build the remote command. Quote the store path so spaces
-            // (rare but possible) don't break parsing.
-            let remote_cmd = format!(
-                "nix copy --no-check-sigs --to {} {}",
-                shell_escape(&store_uri),
-                shell_escape(&self.store_path),
-            );
+            let mut remote_cmd =
+                format!("nix copy --no-check-sigs --to {}", shell_escape(&store_uri),);
+            for p in &self.store_paths {
+                remote_cmd.push(' ');
+                remote_cmd.push_str(&shell_escape(p));
+            }
             Command::new("ssh")
                 .args([
                     "-o",
