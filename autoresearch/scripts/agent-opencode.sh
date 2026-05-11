@@ -31,15 +31,31 @@ set -euo pipefail
 
 LITELLM_BASE_URL="${LITELLM_BASE_URL:-http://localhost:4000}"
 LITELLM_API_KEY="${LITELLM_API_KEY:-}"
-AR_MODEL="${AR_MODEL:-claude-haiku-4-5}"
+SUB2API_BASE_URL="${SUB2API_BASE_URL:-http://sub2api.apps.svc.cluster.local:8080/v1}"
+SUB2API_API_KEY="${SUB2API_API_KEY:-}"
+AR_MODEL="${AR_MODEL:-claude-haiku-4-5-20251001}"
 
-# Prefer the newer npm binary (1.14+) which has --dir and --dangerously-skip-permissions.
-# Note: use the npm binary for `run` mode — only ACP mode crashes on NixOS.
+# Route: claude-* → sub2api direct (bypass LiteLLM to avoid subscription/
+# prefix parsing issues and proxy quota conflation).
+# Everything else → litellm proxy.
 OPENCODE_BIN="${OPENCODE_BIN:-$HOME/.local/bin/opencode}"
 
-if [[ -z "$LITELLM_API_KEY" ]]; then
-    echo "agent-opencode: LITELLM_API_KEY not set" >&2
-    exit 7
+if [[ "$AR_MODEL" == claude-* ]]; then
+    if [[ -z "$SUB2API_API_KEY" ]]; then
+        echo "agent-opencode: claude model requires SUB2API_API_KEY" >&2
+        exit 7
+    fi
+    PROVIDER_NAME="sub2api"
+    PROVIDER_BASE_URL="$SUB2API_BASE_URL"
+    PROVIDER_API_KEY="$SUB2API_API_KEY"
+else
+    if [[ -z "$LITELLM_API_KEY" ]]; then
+        echo "agent-opencode: LITELLM_API_KEY not set" >&2
+        exit 7
+    fi
+    PROVIDER_NAME="litellm"
+    PROVIDER_BASE_URL="$LITELLM_BASE_URL"
+    PROVIDER_API_KEY="$LITELLM_API_KEY"
 fi
 
 if [[ ! -x "$OPENCODE_BIN" ]]; then
@@ -58,27 +74,27 @@ trap 'rm -f "$PROMPT"; rm -rf "$OC_CFG"' EXIT
     cat "$AR_TASK_FILE"
 } > "$PROMPT"
 
-export OPENAI_BASE_URL="$LITELLM_BASE_URL"
-export OPENAI_API_KEY="$LITELLM_API_KEY"
+export OPENAI_BASE_URL="$PROVIDER_BASE_URL"
+export OPENAI_API_KEY="$PROVIDER_API_KEY"
 
 mkdir -p "$OC_CFG/opencode"
 cat > "$OC_CFG/opencode/config.json" <<JSON
 {
   "\$schema": "https://opencode.ai/config.json",
   "provider": {
-    "litellm": {
+    "$PROVIDER_NAME": {
       "npm": "@ai-sdk/openai-compatible",
-      "name": "LiteLLM",
+      "name": "$PROVIDER_NAME",
       "options": {
-        "baseURL": "$LITELLM_BASE_URL",
-        "apiKey": "$LITELLM_API_KEY"
+        "baseURL": "$PROVIDER_BASE_URL",
+        "apiKey": "$PROVIDER_API_KEY"
       },
       "models": {
         "$AR_MODEL": {}
       }
     }
   },
-  "small_model": "litellm/$AR_MODEL",
+  "small_model": "$PROVIDER_NAME/$AR_MODEL",
   "compaction": {
     "auto": true,
     "prune": true,
@@ -89,7 +105,7 @@ cat > "$OC_CFG/opencode/config.json" <<JSON
 }
 JSON
 XDG_CONFIG_HOME="$OC_CFG" "$OPENCODE_BIN" run \
-    --model "litellm/$AR_MODEL" \
+    --model "$PROVIDER_NAME/$AR_MODEL" \
     --dir "$AR_WORKTREE" \
     --dangerously-skip-permissions \
     "$(cat "$PROMPT")"
