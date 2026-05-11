@@ -107,15 +107,28 @@ choice, but you do not have choice — you got the task you got.
 ## Per-task-type guidance
 
 ### `nix-parallelize`
-The 6 TODOs in `crates/consortium-nix/src/{copy,health,activate,build,eval}.rs`
-ask for fanout via core's `Task`/`Worker` primitives. Reuse:
-- `crates/consortium/src/task.rs` and `worker.rs` — do not reimplement.
-  (The crate is named `consortium`, NOT `consortium-crate` or `core`.
-  Check `Cargo.toml` package name if unsure.)
-- The DAG executor in `crates/consortium/src/dag.rs` — threads +
-  channels, no tokio.
+The TODOs in `crates/consortium-nix/src/{copy,health,activate,build,eval}.rs`
+ask for parallel execution across multiple hosts. Two valid approaches:
+
+**Option A — `rayon` (preferred for local CPU-bound fan-out):**
+- Add `rayon` to `crates/consortium-nix/Cargo.toml` (check if already present).
+- Replace the sequential `for` loop with `par_iter()` / `par_iter_mut()`.
+- Collect results into a `HashMap` or `Vec` using `collect()`.
+- This is the right choice for `eval_all` (parallel `nix` subprocess spawns)
+  and `copy_closures` (parallel SSH copy via `nix copy`).
+
+**Option B — consortium `Task`/`Worker` (for SSH shell fan-out only):**
+- Only use this if the operation is a raw shell command sent to remote nodes.
+- Reuse `crates/consortium/src/task.rs` — do NOT reimplement.
+- The crate is named `consortium`, not `consortium-crate`.
+- The DAG executor in `crates/consortium/src/dag.rs` uses threads + channels, no tokio.
+
+For `eval_all` and `copy_closures`, **use Option A (rayon)**. The TODO comments
+say "Task/Worker fanout" but those functions run local subprocesses, not remote
+SSH commands — rayon is the correct primitive.
+
 Add at least one test in `crates/consortium-nix/tests/` that exercises
-the new fanout against a 3-node mock target.
+the new parallel execution against a mock or fixture.
 
 ### `port-python-test`
 Translate one `tests/<X>Test.py` from the consortium-tests repo (or a

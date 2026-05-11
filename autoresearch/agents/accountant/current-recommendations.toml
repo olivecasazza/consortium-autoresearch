@@ -26,10 +26,10 @@ chosen_at = "2026-04-27T20:50:00Z"
 bead = "ni-ksx"
 
 [nix-parallelize]
-model = "qwen3-coder-free"
-tier = "free"
-reason = "Mid-tier — needs more reasoning than 8B for parallelization patterns; free OpenRouter qwen3-coder is the right step up before paid."
-chosen_at = "2026-04-27T20:50:00Z"
+model = "claude-sonnet-4-6"
+tier = "paid-mid"
+reason = "Auto-escalated: 3 abandons on claude-haiku-4-5 (no-diff, task requires non-trivial Rust async parallelism with Task/Worker API). Bumping to sonnet tier."
+chosen_at = "2026-05-11T01:52:00Z"
 bead = "ni-ksx"
 
 [pyfix]
