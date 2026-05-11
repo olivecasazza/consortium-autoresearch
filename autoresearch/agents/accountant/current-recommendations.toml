@@ -12,17 +12,17 @@
 #     Anthropic tier). Repo structure / deploy chain / dep analysis.
 
 [default]
-model = "traitor/qwen3-8b"
-tier = "local"
-reason = "AMD GPU == dogs. Default for all unmarked task types."
-chosen_at = "2026-04-27T20:50:00Z"
+model = "claude-haiku-4-5"
+tier = "paid-cheap"
+reason = "Only model with working opencode tool-use via LiteLLM as of 2026-05-11. traitor/qwen3-8b deregistered; qwen3-* free models do not execute tool calls."
+chosen_at = "2026-05-11T02:10:00Z"
 bead = "ni-ksx"
 
 [upstream-sync]
-model = "traitor/qwen3-8b"
-tier = "local"
-reason = "Mechanical port task. Dogs."
-chosen_at = "2026-04-27T20:50:00Z"
+model = "claude-haiku-4-5"
+tier = "paid-cheap"
+reason = "traitor/qwen3-8b deregistered. Using haiku as default working model."
+chosen_at = "2026-05-11T02:10:00Z"
 bead = "ni-ksx"
 
 [nix-parallelize]
@@ -33,17 +33,17 @@ chosen_at = "2026-05-11T01:52:00Z"
 bead = "ni-ksx"
 
 [pyfix]
-model = "traitor/qwen3-8b"
-tier = "local"
-reason = "Small Python fixes. Dogs."
-chosen_at = "2026-04-27T20:50:00Z"
+model = "claude-haiku-4-5"
+tier = "paid-cheap"
+reason = "traitor/qwen3-8b deregistered; qwen3-* free tier broken tool-use. haiku confirmed working."
+chosen_at = "2026-05-11T02:10:00Z"
 bead = "ni-ksx"
 
 [port-python-fixme]
-model = "qwen3-coder-free"
-tier = "free"
-reason = "Mid-tier — porting Python idioms to Rust needs more than 8B."
-chosen_at = "2026-04-27T20:50:00Z"
+model = "claude-haiku-4-5"
+tier = "paid-cheap"
+reason = "qwen3-coder-free broken tool-use. haiku confirmed working via litellm."
+chosen_at = "2026-05-11T02:10:00Z"
 bead = "ni-ksx"
 
 [port-python-test]
