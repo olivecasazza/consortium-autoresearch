@@ -35,19 +35,24 @@ SUB2API_BASE_URL="${SUB2API_BASE_URL:-http://sub2api.apps.svc.cluster.local:8080
 SUB2API_API_KEY="${SUB2API_API_KEY:-}"
 AR_MODEL="${AR_MODEL:-claude-haiku-4-5-20251001}"
 
-# Route: claude-* → sub2api direct (bypass LiteLLM to avoid subscription/
-# prefix parsing issues and proxy quota conflation).
+# Route: claude-* and subscription/* → sub2api direct.
 # Everything else → litellm proxy.
 OPENCODE_BIN="${OPENCODE_BIN:-$HOME/.local/bin/opencode}"
 
-if [[ "$AR_MODEL" == claude-* ]]; then
+if [[ "$AR_MODEL" == claude-* ]] || [[ "$AR_MODEL" == subscription/* ]]; then
     if [[ -z "$SUB2API_API_KEY" ]]; then
-        echo "agent-opencode: claude model requires SUB2API_API_KEY" >&2
+        echo "agent-opencode: sub2api model requires SUB2API_API_KEY" >&2
         exit 7
     fi
     PROVIDER_NAME="sub2api"
     PROVIDER_BASE_URL="$SUB2API_BASE_URL"
     PROVIDER_API_KEY="$SUB2API_API_KEY"
+    # opencode parses --model as "provider/model" on the first slash.
+    # subscription/gemini-2.5-flash would be split as provider=subscription.
+    # Use an alias key in config.json and pass that as the model arg;
+    # the "id" field tells opencode what to actually send to the API.
+    MODEL_ALIAS="${AR_MODEL//\//-}"   # subscription/gemini-2.5-flash → subscription-gemini-2.5-flash
+    MODEL_ID="$AR_MODEL"
 else
     if [[ -z "$LITELLM_API_KEY" ]]; then
         echo "agent-opencode: LITELLM_API_KEY not set" >&2
@@ -56,6 +61,8 @@ else
     PROVIDER_NAME="litellm"
     PROVIDER_BASE_URL="$LITELLM_BASE_URL"
     PROVIDER_API_KEY="$LITELLM_API_KEY"
+    MODEL_ALIAS="$AR_MODEL"
+    MODEL_ID="$AR_MODEL"
 fi
 
 if [[ ! -x "$OPENCODE_BIN" ]]; then
@@ -90,11 +97,11 @@ cat > "$OC_CFG/opencode/config.json" <<JSON
         "apiKey": "$PROVIDER_API_KEY"
       },
       "models": {
-        "$AR_MODEL": {}
+        "$MODEL_ALIAS": { "id": "$MODEL_ID" }
       }
     }
   },
-  "small_model": "$PROVIDER_NAME/$AR_MODEL",
+  "small_model": "$PROVIDER_NAME/$MODEL_ALIAS",
   "compaction": {
     "auto": true,
     "prune": true,
@@ -105,7 +112,7 @@ cat > "$OC_CFG/opencode/config.json" <<JSON
 }
 JSON
 XDG_CONFIG_HOME="$OC_CFG" "$OPENCODE_BIN" run \
-    --model "$PROVIDER_NAME/$AR_MODEL" \
+    --model "$PROVIDER_NAME/$MODEL_ALIAS" \
     --dir "$AR_WORKTREE" \
     --dangerously-skip-permissions \
     "$(cat "$PROMPT")"

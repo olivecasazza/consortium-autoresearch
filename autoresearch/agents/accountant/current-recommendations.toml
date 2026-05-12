@@ -12,38 +12,38 @@
 #     Anthropic tier). Repo structure / deploy chain / dep analysis.
 
 [default]
-model = "claude-haiku-4-5-20251001"
-tier = "paid-cheap"
-reason = "Only model with working opencode tool-use via LiteLLM as of 2026-05-11. traitor/qwen3-8b deregistered; qwen3-* free models do not execute tool calls."
-chosen_at = "2026-05-11T02:10:00Z"
+model = "gemini-2.5-flash-sub"
+tier = "subscription"
+reason = "Gemini 2.5 Flash via sub2api OAuth (slash-free litellm alias). No per-token cost. Claude exhausted third-party usage cap 2026-05-11."
+chosen_at = "2026-05-11T06:30:00Z"
 bead = "ni-ksx"
 
 [upstream-sync]
-model = "claude-haiku-4-5-20251001"
-tier = "paid-cheap"
-reason = "traitor/qwen3-8b deregistered. Using haiku as default working model."
-chosen_at = "2026-05-11T02:10:00Z"
+model = "gemini-2.5-flash-sub"
+tier = "subscription"
+reason = "Gemini sub alias. Claude cap hit."
+chosen_at = "2026-05-11T06:30:00Z"
 bead = "ni-ksx"
 
 [nix-parallelize]
-model = "claude-sonnet-4-6"
-tier = "paid-mid"
-reason = "Auto-escalated: 3 abandons on claude-haiku-4-5 (no-diff, task requires non-trivial Rust async parallelism with Task/Worker API). Bumping to sonnet tier."
-chosen_at = "2026-05-11T01:52:00Z"
+model = "gemini-3.1-pro-sub"
+tier = "subscription"
+reason = "Hard Rust parallelism task — escalate to Gemini 3.1 Pro sub. Claude sonnet cap hit."
+chosen_at = "2026-05-11T06:30:00Z"
 bead = "ni-ksx"
 
 [pyfix]
-model = "claude-haiku-4-5-20251001"
-tier = "paid-cheap"
-reason = "traitor/qwen3-8b deregistered; qwen3-* free tier broken tool-use. haiku confirmed working."
-chosen_at = "2026-05-11T02:10:00Z"
+model = "gemini-2.5-flash-sub"
+tier = "subscription"
+reason = "Gemini sub alias. Claude cap hit."
+chosen_at = "2026-05-11T06:30:00Z"
 bead = "ni-ksx"
 
 [port-python-fixme]
-model = "claude-haiku-4-5-20251001"
-tier = "paid-cheap"
-reason = "qwen3-coder-free broken tool-use. haiku confirmed working via litellm."
-chosen_at = "2026-05-11T02:10:00Z"
+model = "gemini-2.5-flash-sub"
+tier = "subscription"
+reason = "Gemini sub alias. Claude cap hit."
+chosen_at = "2026-05-11T06:30:00Z"
 bead = "ni-ksx"
 
 [port-python-test]
