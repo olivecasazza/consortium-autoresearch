@@ -159,7 +159,11 @@ class PropagationTreeRouter(object):
         self._unreachable_hosts.add(dst)
 
     def _best_next_hop(self, candidates):
-        """find out a good next hop gateway"""
+        """find out a good next hop gateway
+        
+        Returns the host with the fewest current connections to balance load,
+        or None if no available hosts exist.
+        """
         # Filter out unreachable hosts
         available = candidates.difference(self._unreachable_hosts)
         if not available:
