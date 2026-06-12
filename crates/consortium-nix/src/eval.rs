@@ -1,7 +1,7 @@
 //! Nix evaluation — resolve toplevel store paths and detect changes.
 
 use std::collections::HashMap;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use crate::config::{DeployAction, DeploymentPlan, DeploymentTarget, FleetConfig};
 use crate::error::{NixError, Result};
@@ -74,15 +74,20 @@ pub fn eval_toplevel(flake_uri: &str, hostname: &str) -> Result<String> {
 pub fn query_current_system(host: &str, user: &str) -> Result<Option<String>> {
     let output = Command::new("ssh")
         .args([
+            "-n",
+            "-oBatchMode=yes",
             "-oStrictHostKeyChecking=no",
             "-oPasswordAuthentication=no",
             "-oConnectTimeout=10",
+            "-oServerAliveInterval=15",
+            "-oServerAliveCountMax=4",
             "-l",
             user,
             host,
             "readlink",
             "/run/current-system",
         ])
+        .stdin(Stdio::null())
         .output()
         .map_err(|e| NixError::SshFailed {
             host: host.to_string(),

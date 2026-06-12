@@ -1,6 +1,6 @@
 //! Builder health checking — probe builders for SSH connectivity and Nix store access.
 
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::Instant;
 
 use crate::config::{Builder, FleetConfig};
@@ -36,6 +36,7 @@ pub fn check_builder(builder: &Builder) -> HealthStatus {
     // First check SSH connectivity
     let ssh_result = Command::new("ssh")
         .args([
+            "-n",
             "-oStrictHostKeyChecking=no",
             "-oPasswordAuthentication=no",
             "-oConnectTimeout=5",
@@ -45,6 +46,7 @@ pub fn check_builder(builder: &Builder) -> HealthStatus {
             &builder.host,
             "true",
         ])
+        .stdin(Stdio::null())
         .output();
 
     match ssh_result {
@@ -112,6 +114,7 @@ pub fn warm_connections(builders: &[&HealthStatus], control_path: &str) -> Resul
         let b = &status.builder;
         let output = Command::new("ssh")
             .args([
+                "-n",
                 "-oStrictHostKeyChecking=no",
                 "-oPasswordAuthentication=no",
                 "-oControlMaster=auto",
@@ -123,6 +126,7 @@ pub fn warm_connections(builders: &[&HealthStatus], control_path: &str) -> Resul
                 &b.user,
                 &b.host,
             ])
+            .stdin(Stdio::null())
             .output()
             .map_err(|e| NixError::SshFailed {
                 host: b.host.clone(),

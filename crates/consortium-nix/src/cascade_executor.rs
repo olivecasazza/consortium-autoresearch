@@ -33,7 +33,7 @@
 //!   alt source might succeed, e.g. if it was source-side bandwidth)
 
 use std::collections::HashMap;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -147,6 +147,7 @@ impl NixCopyExecutor {
             }
             Command::new("ssh")
                 .args([
+                    "-n",
                     "-o",
                     "BatchMode=yes",
                     "-o",
@@ -154,6 +155,7 @@ impl NixCopyExecutor {
                 ])
                 .arg(src_addr)
                 .arg(remote_cmd)
+                .stdin(Stdio::null())
                 .output()
         };
 

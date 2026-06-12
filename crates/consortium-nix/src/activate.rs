@@ -1,7 +1,7 @@
 //! Profile activation — switch NixOS/nix-darwin systems to new configurations.
 
 use std::collections::HashMap;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use crate::config::{DeployAction, DeploymentPlan, ProfileType};
 use crate::error::{NixError, Result};
@@ -81,14 +81,19 @@ pub fn activate_host(
 
     let output = Command::new("ssh")
         .args([
+            "-n",
+            "-oBatchMode=yes",
             "-oStrictHostKeyChecking=no",
             "-oPasswordAuthentication=no",
             "-oConnectTimeout=30",
+            "-oServerAliveInterval=15",
+            "-oServerAliveCountMax=4",
             "-l",
             user,
             host,
             &activation_cmd,
         ])
+        .stdin(Stdio::null())
         .output()
         .map_err(|e| NixError::ActivationFailed {
             host: host.to_string(),
@@ -115,14 +120,19 @@ fn set_profile(host: &str, user: &str, toplevel_path: &str) -> Result<()> {
 
     let output = Command::new("ssh")
         .args([
+            "-n",
+            "-oBatchMode=yes",
             "-oStrictHostKeyChecking=no",
             "-oPasswordAuthentication=no",
             "-oConnectTimeout=30",
+            "-oServerAliveInterval=15",
+            "-oServerAliveCountMax=4",
             "-l",
             user,
             host,
             &cmd,
         ])
+        .stdin(Stdio::null())
         .output()
         .map_err(|e| NixError::ActivationFailed {
             host: host.to_string(),
