@@ -6,7 +6,7 @@ Used for migrating one Python ClusterShell test into Rust.
 
 ```yaml
 type: port-python-test
-target_file: tests/<X>Test.py
+target_file: tests/<X>Test.py   # relative to the consortium-tests repo root
 target_line: <N>            # the def test_<name> line
 test_name: <test_name>
 description: <one-line copied from the docstring or assert message>
@@ -14,10 +14,16 @@ acceptance:
   - new test exists under crates/<appropriate-crate>/tests/
   - new test asserts the same behavior as the Python original
   - cargo nextest run --workspace passes (and the count goes up by 1)
-  - the original Python test still passes (we keep both during migration)
+  - the original Python test still passes (we keep both during migration;
+    run pytest in the consortium-tests checkout)
 ```
 
 ## Body
+
+The Python source lives in the sibling `consortium-tests` repo
+(`../consortium-tests` next to the main checkout; `$CONSORTIUM_TESTS_DIR`
+overrides). Read the original test there; write the Rust port in this
+repo's worktree.
 
 Rules:
 - One test per task. If the Python test class has setup/teardown that

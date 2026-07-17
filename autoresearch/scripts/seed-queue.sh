@@ -6,8 +6,9 @@
 # Sources:
 #   - TODO comments in crates/consortium-nix/src/*.rs              → nix-parallelize
 #   - todo!() / unimplemented!() in crates/*/src/**/*.rs            → resolve-rust-todo
-#   - FIXME / XXX comments in lib/ClusterShell/**/*.py              → port-python-fixme
-#   - test functions in tests/*Test.py without a Rust analogue       → port-python-test (sampled)
+#   - FIXME / XXX comments in consortium-tests lib/ClusterShell/**/*.py  → port-python-fixme
+#   - test functions in consortium-tests tests/*Test.py without a Rust
+#     analogue                                                          → port-python-test (sampled)
 #
 # Idempotent: if a task file with the same id already exists in any
 # queue/ subdir (pending, in-progress, done, abandoned), skip it.
@@ -15,6 +16,7 @@ set -euo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
+CONSORTIUM_TESTS_DIR="${CONSORTIUM_TESTS_DIR:-$REPO_ROOT/../consortium-tests}"
 
 QUEUE="$REPO_ROOT/autoresearch/queue"
 PENDING="$QUEUE/pending"
@@ -74,15 +76,20 @@ while IFS=: read -r file line rest; do
     emit "$id" "resolve-rust-todo" "$relfile" "$line" "$macro at $relfile:$line" "macro = \"$macro\""
 done < <(grep -rn -E '\b(todo|unimplemented)!\(\)' crates/ --include='*.rs' 2>/dev/null || true)
 
-# 3. lib/ FIXMEs and XXX.
-while IFS=: read -r file line rest; do
-    [[ -z "$file" ]] && continue
-    desc=$(echo "$rest" | sed -E 's/^[[:space:]]*#[[:space:]]*//; s/^[[:space:]]+//; s/[[:space:]]+$//')
-    relfile="${file#./}"
-    sha=$(echo "$relfile:$line" | sha1sum | cut -c1-8)
-    id="pyfix-$sha"
-    emit "$id" "port-python-fixme" "$relfile" "$line" "$desc"
-done < <(grep -rn -E '#\s*(FIXME|XXX)' lib/ 2>/dev/null || true)
+# 3. lib/ FIXMEs and XXX. The Python oracle lives in the sibling
+# consortium-tests repo; target_file is recorded relative to its root.
+if [[ -d "$CONSORTIUM_TESTS_DIR/lib" ]]; then
+    while IFS=: read -r file line rest; do
+        [[ -z "$file" ]] && continue
+        desc=$(echo "$rest" | sed -E 's/^[[:space:]]*#[[:space:]]*//; s/^[[:space:]]+//; s/[[:space:]]+$//')
+        relfile="${file#./}"
+        sha=$(echo "$relfile:$line" | sha1sum | cut -c1-8)
+        id="pyfix-$sha"
+        emit "$id" "port-python-fixme" "$relfile" "$line" "$desc" 'repo = "consortium-tests"'
+    done < <(cd "$CONSORTIUM_TESTS_DIR" && grep -rn -E '#\s*(FIXME|XXX)' lib/ 2>/dev/null || true)
+else
+    echo "WARN: $CONSORTIUM_TESTS_DIR/lib not found — skipping lib/ FIXME seeding" >&2
+fi
 
 echo
 echo "queue/pending/ now contains $(find "$PENDING" -name '*.task.toml' | wc -l) tasks"

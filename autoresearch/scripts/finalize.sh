@@ -32,7 +32,9 @@ if git diff --name-only HEAD | grep -qE '^modules/k8s/'; then
 fi
 
 # Stage only files under the safe roots. Anything else needs human review.
-git add -- crates/ lib/ tests/ doc/ Cargo.toml Cargo.lock 2>/dev/null || true
+# (lib/ and tests/ moved to the sibling consortium-tests repo; python-side
+# task changes are committed there, not in this repo.)
+git add -- crates/ doc/ Cargo.toml Cargo.lock 2>/dev/null || true
 
 # Commit. Pre-commit hooks (rustfmt, etc.) are enforced — never bypass.
 if ! git commit -m "$COMMIT_MSG"; then

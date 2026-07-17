@@ -33,6 +33,15 @@ autoresearch/
 └── logs/               # per-agent stdout/stderr
 ```
 
+## Test infrastructure lives in a sibling repo
+
+The Python oracle (`lib/`), upstream pytest suite (`tests/`), harness
+scripts (`harness/`), `UPSTREAM_REF`, and `TEST_MAPPING.toml` moved to
+`../consortium-tests`. Scripts resolve it via
+`CONSORTIUM_TESTS_DIR="${CONSORTIUM_TESTS_DIR:-$REPO_ROOT/../consortium-tests}"` —
+export `CONSORTIUM_TESTS_DIR` to point at a different checkout. Rust
+crate paths (`crates/...`) are unchanged.
+
 ## One-time setup
 
 ```sh

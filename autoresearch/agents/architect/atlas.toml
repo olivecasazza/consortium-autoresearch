@@ -23,15 +23,13 @@ name = "consortium"
 path = "/home/olive/Repositories/consortium"
 language = "rust + python (PyO3 bindings)"
 build_system = "Cargo workspace, flake-parts/crane for Nix, maturin for Python bindings"
-test_runner = "cargo nextest (.config/nextest.toml) + pytest (ClusterShell regression)"
+test_runner = "cargo nextest (.config/nextest.toml); pytest suite lives in the consortium-tests sibling repo"
 docs_home = "doc/sphinx/, doc/man/, README.md"
 deploy_chain = "n/a — library/CLI; published via cargo + Nix flake"
 
 [repo.layout]
-crates = "9 member crates, exact dirnames: consortium (core, holds Task/Worker/DAG primitives at src/{task,worker,dag}.rs), consortium-cli, consortium-nix, consortium-ansible, consortium-slurm, consortium-ray, consortium-skypilot, consortium-py, consortium-test-harness"
-lib = "legacy ClusterShell Python library — kept for backwards compat / regression"
+crates = "9 member crates, exact dirnames: consortium (core, holds Task/Worker/DAG primitives at src/{task,worker,dag}.rs), consortium-cli, consortium-nix, consortium-ansible, consortium-slurm, consortium-ray, consortium-skypilot, consortium-py, consortium-fanout-sim"
 doc = "sphinx + man pages + examples"
-tests = "Python regression tests pinning ClusterShell-compatible behavior"
 nix = "build helpers, pre-commit config"
 
 conventions = [
@@ -60,7 +58,6 @@ deploy_chain = "overnight agent loop — gc supervisor → drain-queue order →
 crates = "same 9 crates as consortium upstream (NOT consortium-crate or core — those names appear nowhere in this fork)"
 autoresearch = "agent loop: program.md, scripts/, queue/, tasks/, logs/, results.tsv; gascity city (city.toml + pack.toml + orders/ + agents/)"
 ".claude" = "agent worktrees under .claude/worktrees/agent-<id>/"
-lib = "ClusterShell legacy (inherited)"
 doc = "inherited from upstream"
 
 conventions = [
@@ -69,11 +66,42 @@ conventions = [
   "Per-agent worktrees in .claude/worktrees/agent-<id>/ on branch agent/<id>/<topic>",
   "Each task lives in autoresearch/queue/{pending,in-progress,done,abandoned}/<id>.task.toml",
   "Score gate: cargo nextest + clippy + fmt vs baseline in autoresearch/.baseline.json",
+  "Test infra (lib/, tests/, harness/, UPSTREAM_REF, TEST_MAPPING.toml) lives in the sibling consortium-tests repo ($CONSORTIUM_TESTS_DIR, default ../consortium-tests)",
 ]
 gotchas = [
   "Fork; periodically rebase from upstream consortium",
   "Autoresearch agents may leave detached worktrees on crash — check .claude/worktrees/ before restart",
   "bd commands need --force flags in non-interactive contexts (cp/mv/rm)",
+]
+
+# ────────────────────────────────────────────────────────────────────────
+[[repo]]
+name = "consortium-tests"
+path = "/home/olive/Repositories/consortium-tests"
+language = "python (ClusterShell oracle) + rust (test-harness, integration-tests crates)"
+build_system = "Cargo workspace for the rust crates; pytest for the oracle suite"
+test_runner = "pytest (upstream ClusterShell suite) + cargo nextest (harness crates) + Parity Suite workflow"
+docs_home = "README.md, TEST_MAPPING.toml, UPSTREAM_REF"
+deploy_chain = "n/a — test infrastructure; consumed by consortium CI and autoresearch"
+
+[repo.layout]
+lib = "ClusterShell Python oracle — kept for backwards compat / regression"
+tests = "upstream Python regression tests pinning ClusterShell-compatible behavior"
+harness = "comparison/mapping scripts (run_comparison.py, generate_test_mapping.py, sync_upstream_tests.sh, ...)"
+conf = "ClusterShell config fixtures"
+"test-harness" = "rust crate: mock SSH/Nix nodes for integration tests (moved out of consortium crates/)"
+"integration-tests" = "rust crate: end-to-end suite"
+doc-legacy = "inherited ClusterShell docs"
+packaging = "rpm/deb packaging inherited from upstream"
+
+conventions = [
+  "UPSTREAM_REF pins the last-integrated cea-hpc/clustershell tag/sha",
+  "TEST_MAPPING.toml maps upstream python tests to their Rust analogues",
+  "Scripts in consortium resolve this repo via $CONSORTIUM_TESTS_DIR (default ../consortium-tests)",
+]
+gotchas = [
+  "Standalone repo — no shared history with consortium or cea-hpc/clustershell",
+  "The `upstream` remote (cea-hpc/clustershell) is added on demand by autoresearch/scripts/upstream-diff.sh",
 ]
 
 # ────────────────────────────────────────────────────────────────────────

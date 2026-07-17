@@ -9,7 +9,8 @@
 #   - cargo fmt --check passes (absolute)
 #   - tests_passing(branch) >= tests_passing(master)
 #   - clippy_errors(branch) <= clippy_errors(master)
-#   - if diff touches lib/ or tests/*.py: pytest -x passes (absolute)
+#   - if Python paths are touched (lib/, tests/ — these live in the
+#     sibling consortium-tests repo): pytest -x passes there (absolute)
 #
 # This means agents are not penalized for pre-existing clippy noise, but
 # they cannot regress test counts or add new clippy errors.
@@ -38,6 +39,8 @@ fi
 # lives in the main checkout).
 MAIN_REPO="$(git worktree list --porcelain | head -1 | awk '{print $2}')"
 BASELINE="$MAIN_REPO/autoresearch/.baseline.json"
+# Python oracle + upstream tests live in the sibling consortium-tests repo.
+CONSORTIUM_TESTS_DIR="${CONSORTIUM_TESTS_DIR:-$MAIN_REPO/../consortium-tests}"
 if [[ ! -f "$BASELINE" ]]; then
     echo "score: $BASELINE missing — run autoresearch/scripts/compute-baseline.sh first" >&2
     exit 9
@@ -89,15 +92,27 @@ else
     FAIL=$((FAIL + 1))
 fi
 
-# Gate 4 (absolute, conditional): pytest if Python paths touched.
+# Gate 4 (absolute, conditional): pytest if Python paths touched. Since
+# the test-infrastructure split, lib/ and tests/ live in the sibling
+# consortium-tests repo. The gate fires when this repo's diff touches
+# them (legacy), or when the sibling checkout has pending lib//tests
+# changes (python-side task in flight), and pytest runs there.
 BASE_REMOTE=origin
 git -C "$WORKTREE" remote get-url "$BASE_REMOTE" >/dev/null 2>&1 || BASE_REMOTE=consortium
 BASE_REF="$BASE_REMOTE/master"
 git -C "$WORKTREE" rev-parse --verify "$BASE_REF" >/dev/null 2>&1 || BASE_REF=master
 
+PY_TOUCHED=0
 if git diff --name-only "$BASE_REF"...HEAD 2>/dev/null | grep -qE '^(lib/|tests/.*\.py$)'; then
+    PY_TOUCHED=1
+elif [[ -d "$CONSORTIUM_TESTS_DIR/.git" ]] \
+        && [[ -n "$(git -C "$CONSORTIUM_TESTS_DIR" status --porcelain -- lib/ tests/ 2>/dev/null)" ]]; then
+    PY_TOUCHED=1
+fi
+
+if [[ $PY_TOUCHED -eq 1 ]]; then
     if command -v pytest >/dev/null 2>&1; then
-        if pytest tests/ -v --timeout=30 -x >"$TMP/pytest.log" 2>&1; then
+        if (cd "$CONSORTIUM_TESTS_DIR" && pytest tests/ -v --timeout=30 -x) >"$TMP/pytest.log" 2>&1; then
             SUMMARY+="PASS  pytest"$'\n'
         else
             SUMMARY+="FAIL  pytest"$'\n'

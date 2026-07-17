@@ -7,6 +7,12 @@ isolated git worktree. There are other agents like you working on other
 tasks in sibling worktrees. Do not interact with them or with their
 worktrees.
 
+**Repo layout.** Test infrastructure lives in the sibling
+`consortium-tests` repo (`../consortium-tests` next to the main
+checkout; `$CONSORTIUM_TESTS_DIR` overrides): the Python oracle `lib/`,
+the upstream pytest suite `tests/`, `harness/`, `UPSTREAM_REF`, and
+`TEST_MAPPING.toml`. Rust crates stay in this repo under `crates/`.
+
 ## Your single job
 
 Read **one** task file, complete it, and either land a clean commit or
@@ -50,7 +56,8 @@ is `$AR_WORKTREE` (also your CWD). The branch you are on is
    minimal change a human reviewer can scan in a minute.
 8. **Never commit secrets, `.env`, large binaries, or generated
    artefacts.** Stage individual files by name; do not `git add -A`
-   anything outside `crates/`, `lib/`, `tests/`, or `doc/`.
+   anything outside `crates/` or `doc/` (in the consortium-tests repo:
+   `lib/`, `tests/`).
 9. **Conventional commits.** First line `<type>(<scope>): <subject>`,
    ≤72 chars. Types: feat, fix, refactor, test, docs, chore, perf.
    Scope is the crate or module touched (`consortium-nix`, `core`,
@@ -82,8 +89,9 @@ For each task file:
      many passing tests as the master baseline)
    - `cargo clippy --workspace -- -D warnings`
    - `cargo fmt --all -- --check`
-   - For tasks touching `lib/` or `tests/*.py`:
-     `pytest tests/ -v --timeout=30 -x`
+   - For tasks touching the Python oracle (`lib/`, `tests/` in the
+     consortium-tests repo): `pytest tests/ -v --timeout=30 -x` run
+     from `$CONSORTIUM_TESTS_DIR`
 6. **If green**, commit with a single conventional-commit message,
    `git push -u origin "$AR_BRANCH"` if the remote exists, and exit 0.
    The orchestrator will open the PR.
@@ -110,11 +118,11 @@ Add at least one test in `crates/consortium-nix/tests/` that exercises
 the new fanout against a 3-node mock target.
 
 ### `port-python-test`
-Translate one `tests/<X>Test.py` (or a single test method within it)
-into a Rust integration test under the appropriate `crates/*/tests/`.
-Match the assertion semantics, not the Python syntax. If the test
-requires fixtures or test helpers that don't exist in Rust, abandon
-with `needs-helper: <name>`.
+Translate one `tests/<X>Test.py` from the consortium-tests repo (or a
+single test method within it) into a Rust integration test under the
+appropriate `crates/*/tests/`. Match the assertion semantics, not the
+Python syntax. If the test requires fixtures or test helpers that
+don't exist in Rust, abandon with `needs-helper: <name>`.
 
 ### `resolve-rust-todo`
 Replace one `todo!()` or `unimplemented!()` macro with a real
@@ -123,17 +131,20 @@ the now-implemented path, or a justification comment if the macro
 guarded an unreachable case (then use `unreachable!()` with reason).
 
 ### `port-python-fixme`
-Investigate one `FIXME` in `lib/ClusterShell/`. The fix may be:
-(a) a real bug — fix it in Python, add a regression test in `tests/`,
+Investigate one `FIXME` in `lib/ClusterShell/` (in the consortium-tests
+repo — edit and test there, not in your worktree). The fix may be:
+(a) a real bug — fix it in Python, add a regression test in
+consortium-tests `tests/`,
 (b) already not-applicable — remove the FIXME, explain in commit body,
 (c) too large — abandon with `scope: needs-design`.
 
 ### `upstream-sync`
-Apply one upstream commit-range from cea-hpc/clustershell to `lib/`,
-then look for affected files in the Rust port (`crates/`) and either
-replicate the change or file a follow-up task in
-`autoresearch/queue/pending/` named `parity-<sha>.task.toml`. Bump
-`UPSTREAM_REF` only when the entire range is integrated.
+Apply one upstream commit-range from cea-hpc/clustershell to `lib/` in
+the consortium-tests repo, then look for affected files in the Rust
+port (`crates/`) and either replicate the change or file a follow-up
+task in `autoresearch/queue/pending/` named `parity-<sha>.task.toml`.
+Bump `UPSTREAM_REF` (at the consortium-tests root) only when the entire
+range is integrated.
 
 ## Anti-patterns — stop yourself if you notice these
 

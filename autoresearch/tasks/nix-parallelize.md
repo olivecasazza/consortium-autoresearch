@@ -30,5 +30,6 @@ Hint files to read before editing:
 - `crates/consortium-crate/src/task.rs`
 - `crates/consortium-crate/src/worker.rs`
 - `crates/consortium-crate/src/dag.rs`
-- whatever the test harness in `crates/consortium-test-harness/` exposes
-  for spinning up mock SSH/Nix nodes.
+- whatever the test harness in the consortium-tests repo's `test-harness/`
+  crate exposes for spinning up mock SSH/Nix nodes (it moved out of
+  `crates/` with the test-infrastructure split).
