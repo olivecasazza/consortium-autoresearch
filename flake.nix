@@ -55,7 +55,11 @@
           overlays = [ (import rust-overlay) ];
           pkgs = import nixpkgs { inherit system overlays; };
 
-          rustToolchain = pkgs.rust-bin.stable.latest.default.override {
+          # Pinned in rust-toolchain.toml (read by rustup locally, mirrored
+          # here so `nix build` uses the same channel) — avoids re-resolving
+          # `stable.latest` on every rust-overlay/nixpkgs lock bump, which
+          # rotated the toolchain and forced cold rebuilds.
+          rustToolchain = (pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml).override {
             extensions = [
               "rust-src"
               "rust-analyzer"
