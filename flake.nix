@@ -138,6 +138,10 @@
         in
         {
           # ── Pre-commit hooks ─────────────────────────────────────────
+          # PR checks run on buildbot-nix, whose workers are x86_64-linux;
+          # GitHub Actions runs no Nix. Other systems expose no checks.
+          pre-commit.check.enable = system == "x86_64-linux";
+
           pre-commit.settings.hooks = {
             rustfmt = {
               enable = true;
@@ -149,7 +153,8 @@
           };
 
           # ── Checks ─────────────────────────────────────────────────────
-          checks = {
+          # Built by buildbot-nix on every PR (repo topic `nixlab-ci`).
+          checks = lib.optionalAttrs (system == "x86_64-linux") {
             # Rust unit tests
             cargo-test = craneLib.cargoTest (
               commonArgs
@@ -174,6 +179,14 @@
 
             # Build the library
             inherit consortium;
+
+            # The installed CLI starts (was the "Nix Integration" GitHub
+            # Actions job).
+            consortium-cli-smoke = pkgs.runCommand "consortium-cli-smoke" { } ''
+              ${consortium-cli}/bin/cast --help >/dev/null
+              ${consortium-cli}/bin/claw --help >/dev/null
+              touch $out
+            '';
           };
 
           # ── Packages ───────────────────────────────────────────────────
