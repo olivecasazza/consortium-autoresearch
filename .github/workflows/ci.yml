@@ -11,6 +11,13 @@ on:
     branches: [main, master]
   workflow_dispatch:
 
+# `checks: write` is required by mikepenz/action-junit-report. Without it the
+# report step cannot create its check run, so the JUnit gate was inert: the
+# report was printed to the log and the failure was dropped on the floor.
+permissions:
+  contents: read
+  checks: write
+
 jobs:
   # ── Layer 1: Unit Tests (fast, GitHub-hosted) ─────────────────────
   unit:
@@ -19,8 +26,39 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust
+      # CON-97: CI must run the toolchain `rust-toolchain.toml` pins, and must
+      # say so in the log. The pin is read from the file, never duplicated here,
+      # so bumping the pin is a one-line commit with no workflow edit.
+      - name: Read toolchain pin
+        id: pin
+        run: |
+          PIN=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' rust-toolchain.toml | head -1)
+          if [ -z "$PIN" ]; then
+            echo "::error::could not read [toolchain] channel from rust-toolchain.toml"
+            exit 1
+          fi
+          echo "rust-toolchain.toml pins channel=$PIN"
+          echo "channel=$PIN" >> "$GITHUB_OUTPUT"
+
+      # The `@stable` ref is the action's own code selector and is unused when
+      # the `toolchain` input is supplied; the input wins, so this installs the pin.
+      - name: Install pinned Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ steps.pin.outputs.channel }}
+          components: clippy, rustfmt, rust-src
+
+      - name: Verify toolchain pin
+        run: |
+          PIN="${{ steps.pin.outputs.channel }}"
+          ACTUAL=$(rustc --version)
+          echo "pinned channel    : $PIN"
+          echo "rustc --version   : $ACTUAL"
+          echo "active toolchain  : $(rustup show active-toolchain 2>/dev/null || echo 'rustup unavailable')"
+          if ! echo "$ACTUAL" | grep -q "^rustc ${PIN}"; then
+            echo "::error::CI toolchain (${ACTUAL}) does not match rust-toolchain.toml pin (${PIN})"
+            exit 1
+          fi
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
@@ -34,12 +72,17 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
+      # Regression guard for this issue: a swallow token (`|| true` /
+      # `continue-on-error: true`) anywhere in ci.yml or migration-scorecard.yml
+      # must carry a `justified-guard:` comment, or CI goes red.
+      - name: Audit test gates
+        run: python3 harness/ci/check_test_gates.py
+
       - name: Run unit tests
         run: |
           cargo nextest run --workspace \
             --profile ci \
-            --no-fail-fast \
-            2>&1 || true
+            --no-fail-fast
 
       - name: Publish test results
         uses: mikepenz/action-junit-report@v5
@@ -48,10 +91,29 @@ jobs:
           report_paths: target/nextest/ci/junit.xml
           check_name: Unit Test Results
           include_passed: true
+          # The gate. `fail_on_failure` makes a red test red the job even if the
+          # exit code is ever masked again; `require_tests` makes an empty report
+          # a failure instead of a silent pass (the scorecard's Rust step was
+          # emitting tests="0" failures="0" and rendering as green).
+          fail_on_failure: true
+          fail_on_parse_error: true
+          require_tests: true
 
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-reports
+          path: target/nextest/ci/junit.xml
+          if-no-files-found: error
+          retention-days: 30
+
+      # CON-97: `continue-on-error` removed. clippy is a lint gate, not a test
+      # step, and it is already green — verified on runs 32534376596 (master)
+      # and 36076732386 (ci/buildbot-checks), where the step conclusion is
+      # `success`. The guard was protecting nothing, so it came off.
       - name: Run clippy
         run: cargo clippy --workspace -- -D warnings
-        continue-on-error: true
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -60,6 +122,7 @@ jobs:
         env:
           RUSTDOCFLAGS: "-D warnings"
         run: cargo doc --workspace --no-deps
+
 
   # ── Layer 2: Docker Integration Tests (GitHub-hosted) ─────────────
   docker-integration:
@@ -70,8 +133,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust
+      - name: Read toolchain pin
+        id: pin
+        run: |
+          PIN=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' rust-toolchain.toml | head -1)
+          if [ -z "$PIN" ]; then
+            echo "::error::could not read [toolchain] channel from rust-toolchain.toml"
+            exit 1
+          fi
+          echo "rust-toolchain.toml pins channel=$PIN"
+          echo "channel=$PIN" >> "$GITHUB_OUTPUT"
+
+      - name: Install pinned Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ steps.pin.outputs.channel }}
+          components: clippy, rustfmt, rust-src
+
+      - name: Verify toolchain pin
+        run: |
+          PIN="${{ steps.pin.outputs.channel }}"
+          ACTUAL=$(rustc --version)
+          echo "pinned channel    : $PIN"
+          echo "rustc --version   : $ACTUAL"
+          echo "active toolchain  : $(rustup show active-toolchain 2>/dev/null || echo 'rustup unavailable')"
+          if ! echo "$ACTUAL" | grep -q "^rustc ${PIN}"; then
+            echo "::error::CI toolchain (${ACTUAL}) does not match rust-toolchain.toml pin (${PIN})"
+            exit 1
+          fi
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
@@ -94,15 +183,18 @@ jobs:
       - name: Build SSH node image
         run: docker build -t consortium-ssh-node -f tests/docker/Dockerfile.ssh-node tests/docker/
 
+      # `-p consortium` never matched a package: the crate at crates/consortium
+      # is `consortium-crate` (its *lib* is named `consortium`). The step died on
+      # `error: package ID specification 'consortium' did not match any packages`
+      # and `|| true` hid it, so this job had never executed a single test.
       - name: Run Docker integration tests
         run: |
-          cargo nextest run -p consortium \
+          cargo nextest run -p consortium-crate \
             --features docker-tests \
             --test docker_integration \
             --profile ci \
             --test-threads=1 \
-            --no-fail-fast \
-            2>&1 || true
+            --no-fail-fast
 
       - name: Publish test results
         uses: mikepenz/action-junit-report@v5
@@ -111,6 +203,19 @@ jobs:
           report_paths: target/nextest/ci/junit.xml
           check_name: Docker Integration Results
           include_passed: true
+          fail_on_failure: true
+          fail_on_parse_error: true
+          require_tests: true
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-integration-test-reports
+          path: target/nextest/ci/junit.xml
+          if-no-files-found: error
+          retention-days: 30
+
 
       - name: Cleanup containers
         if: always()
@@ -127,13 +232,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Rust toolchain
+      - name: Setup pinned Rust toolchain
         run: |
-          # Rust and cargo-nextest are in the runner's extraPackages (NixOS module).
-          # Just ensure rustup has a default toolchain.
-          rustup default stable 2>/dev/null || true
+          # CON-97: `rustup default stable 2>/dev/null || true` is deleted. It
+          # silently installed/selected `stable`, discarding the pin. This
+          # installs the channel `rust-toolchain.toml` actually names.
+          PIN=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' rust-toolchain.toml | head -1)
+          if [ -z "$PIN" ]; then
+            echo "::error::could not read [toolchain] channel from rust-toolchain.toml"
+            exit 1
+          fi
+          echo "rust-toolchain.toml pins channel=$PIN"
+          rustup toolchain install "$PIN" --profile minimal --no-self-update
           cargo --version
           cargo nextest --version
+
+      - name: Verify toolchain pin
+        run: |
+          PIN=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' rust-toolchain.toml | head -1)
+          ACTUAL=$(rustc --version)
+          echo "pinned channel    : $PIN"
+          echo "rustc --version   : $ACTUAL"
+          echo "active toolchain  : $(rustup show active-toolchain 2>/dev/null || echo 'rustup unavailable')"
+          if ! echo "$ACTUAL" | grep -q "^rustc ${PIN}"; then
+            echo "::error::self-hosted runner is not using the pinned toolchain (${ACTUAL} != ${PIN})."
+            echo "::error::the NixOS shell is shadowing the rustup shims; pin nixpkgs rust to ${PIN}"
+            echo "::error::or prepend \${CARGO_HOME:-\$HOME/.cargo}/bin to PATH in the runner's extraPackages."
+            exit 1
+          fi
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -158,15 +284,15 @@ jobs:
           docker build -t consortium-nix-node -f tests/docker/Dockerfile.nix-node tests/docker/
           docker build -t consortium-ansible-node -f tests/docker/Dockerfile.ansible-node tests/docker/
 
+      # Same `-p consortium` defect as the docker job: zero tests ever ran here.
       - name: Run tool integration tests
         run: |
-          cargo nextest run -p consortium \
+          cargo nextest run -p consortium-crate \
             --features docker-tests \
             --test tool_integration \
             --profile ci \
             --test-threads=1 \
-            --no-fail-fast \
-            2>&1 || true
+            --no-fail-fast
 
       - name: Publish test results
         uses: mikepenz/action-junit-report@v5
@@ -175,6 +301,19 @@ jobs:
           report_paths: target/nextest/ci/junit.xml
           check_name: Tool Integration Results
           include_passed: true
+          fail_on_failure: true
+          fail_on_parse_error: true
+          require_tests: true
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tool-integration-test-reports
+          path: target/nextest/ci/junit.xml
+          if-no-files-found: error
+          retention-days: 30
+
 
       - name: Generate summary
         if: always()
@@ -207,6 +346,13 @@ jobs:
           ./result/bin/cast --help
           ./result/bin/claw --help
 
+      # justified-guard: this is a distributed-build *reachability* probe against
+      # self-hosted Nix builders, not a test step and not a build of this repo's
+      # code -- `nix build .#consortium-cli` above is the real build gate and is
+      # unguarded. This step already no-ops when /etc/nix/machines is absent; the
+      # guard covers the case where the machines file exists but the builders are
+      # offline or mid-reboot, which is an infrastructure outage, not a code
+      # regression. Un-swallowing it would make builder flakiness block every PR.
       - name: Test distributed builds (if builders reachable)
         continue-on-error: true
         run: |

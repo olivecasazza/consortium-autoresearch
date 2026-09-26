@@ -22,6 +22,12 @@ on:
         required: false
         default: ""
 
+# `checks: write` is required by mikepenz/action-junit-report so the JUnit gate
+# can create its check run. Without it the report was printed and discarded.
+permissions:
+  contents: read
+  checks: write
+
 jobs:
   # ── Layer 1: Unit Tests (fast, no external deps) ──────────────────
   scorecard:
@@ -31,8 +37,36 @@ jobs:
       - uses: actions/checkout@v4
 
       # ── Toolchains ─────────────────────────────────────────────
-      - name: Install Rust
+      # CON-97: the pin is read from rust-toolchain.toml, never duplicated in
+      # the workflow, so bumping it is a one-line commit with no workflow edit.
+      - name: Read toolchain pin
+        id: pin
+        run: |
+          PIN=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' rust-toolchain.toml | head -1)
+          if [ -z "$PIN" ]; then
+            echo "::error::could not read [toolchain] channel from rust-toolchain.toml"
+            exit 1
+          fi
+          echo "rust-toolchain.toml pins channel=$PIN"
+          echo "channel=$PIN" >> "$GITHUB_OUTPUT"
+
+      - name: Install pinned Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ steps.pin.outputs.channel }}
+          components: clippy, rustfmt, rust-src
+
+      - name: Verify toolchain pin
+        run: |
+          PIN="${{ steps.pin.outputs.channel }}"
+          ACTUAL=$(rustc --version)
+          echo "pinned channel    : $PIN"
+          echo "rustc --version   : $ACTUAL"
+          echo "active toolchain  : $(rustup show active-toolchain 2>/dev/null || echo 'rustup unavailable')"
+          if ! echo "$ACTUAL" | grep -q "^rustc ${PIN}"; then
+            echo "::error::CI toolchain (${ACTUAL}) does not match rust-toolchain.toml pin (${PIN})"
+            exit 1
+          fi
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
@@ -68,24 +102,50 @@ jobs:
           maturin develop --release
 
       # ── Rust unit tests ────────────────────────────────────────
+      # `continue-on-error` and the `| tee` exit-code mask are both gone.
+      # `-p consortium` never matched a package — the crate at crates/consortium
+      # is `consortium-crate` (its *lib* is named `consortium`) — so this step
+      # was dying on `package ID specification 'consortium' did not match any
+      # packages` and the guard hid it. `results/rust-unit.xml` was an empty
+      # tests="0" failures="0" suite that the scorecard rendered as green.
+      # `set -o pipefail` keeps nextest's exit code through the tee.
       - name: Run Rust unit tests
-        continue-on-error: true
+        id: rust_unit
         run: |
+          set -o pipefail
           mkdir -p results
           source .venv/bin/activate
           cargo nextest run \
-            -p consortium \
+            -p consortium-crate \
             --profile ci \
-            --no-fail-fast \
-            2>&1 | tee results/rust-raw.txt
+            --no-fail-fast 2>&1 | tee results/rust-raw.txt
 
-          # Generate JUnit XML from cargo test output
-          cargo test -p consortium 2>&1 | \
-            python harness/cargo_to_junit.py > results/rust-unit.xml
+      - name: Collect Rust JUnit report
+        if: always()
+        run: |
+          mkdir -p results
+          if [ ! -f target/nextest/ci/junit.xml ]; then
+            echo "::error::nextest wrote no JUnit report (target/nextest/ci/junit.xml missing)"
+            exit 1
+          fi
+          cp -f target/nextest/ci/junit.xml results/rust-unit.xml
+
+      - name: Publish Rust test results
+        if: always()
+        uses: mikepenz/action-junit-report@v5
+        with:
+          report_paths: results/rust-unit.xml
+          check_name: Rust Unit Test Results
+          include_passed: true
+          fail_on_failure: true
+          fail_on_parse_error: true
+          require_tests: true
 
       # ── Python tests: original backend ─────────────────────────
+      # `continue-on-error` and the trailing `|| true` are both removed: this is
+      # the step that decides whether a red Python test is red CI.
       - name: Run Python tests (original backend)
-        continue-on-error: true
+        id: py_original
         env:
           CONSORTIUM_BACKEND: python
           PYTHONPATH: ${{ github.workspace }}/lib
@@ -94,12 +154,22 @@ jobs:
           python -m pytest tests/ -v \
             --timeout=30 \
             --tb=short \
-            --junit-xml=results/python-original.xml \
-            || true
+            --junit-xml=results/python-original.xml
+
+      - name: Publish Python results (original backend)
+        if: always() && steps.py_original.outcome != 'skipped'
+        uses: mikepenz/action-junit-report@v5
+        with:
+          report_paths: results/python-original.xml
+          check_name: Python Results (original backend)
+          include_passed: true
+          fail_on_failure: true
+          fail_on_parse_error: true
+          require_tests: true
 
       # ── Python tests: Rust backend ─────────────────────────────
       - name: Run Python tests (Rust backend)
-        continue-on-error: true
+        id: py_rust
         env:
           CONSORTIUM_BACKEND: rust
         run: |
@@ -107,14 +177,30 @@ jobs:
           python -m pytest tests/ -v \
             --timeout=30 \
             --tb=short \
-            --junit-xml=results/python-rust.xml \
-            || true
+            --junit-xml=results/python-rust.xml
+
+      - name: Publish Python results (Rust backend)
+        if: always() && steps.py_rust.outcome != 'skipped'
+        uses: mikepenz/action-junit-report@v5
+        with:
+          report_paths: results/python-rust.xml
+          check_name: Python Results (Rust backend)
+          include_passed: true
+          fail_on_failure: true
+          fail_on_parse_error: true
+          require_tests: true
 
       # ── Generate scorecard ─────────────────────────────────────
+      # These stay unconditional so the scorecard artifact and the uploaded
+      # reports are still produced when a test step goes red. They do not mask
+      # anything: the job is already red by then, and a non-zero exit from
+      # either script is still a failure.
       - name: Generate test mapping
+        if: always()
         run: python harness/generate_test_mapping.py --update
 
       - name: Render scorecard
+        if: always()
         run: python harness/render_summary.py --results-dir=results >> $GITHUB_STEP_SUMMARY
 
       # ── Upload artifacts ───────────────────────────────────────
@@ -125,7 +211,9 @@ jobs:
           name: migration-results
           path: |
             results/
+            target/nextest/ci/junit.xml
             TEST_MAPPING.toml
+          if-no-files-found: error
           retention-days: 30
 
   # ── Layer 2: Integration Tests (Docker, runs after unit tests) ────
@@ -137,8 +225,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust
+      - name: Read toolchain pin
+        id: pin
+        run: |
+          PIN=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' rust-toolchain.toml | head -1)
+          if [ -z "$PIN" ]; then
+            echo "::error::could not read [toolchain] channel from rust-toolchain.toml"
+            exit 1
+          fi
+          echo "rust-toolchain.toml pins channel=$PIN"
+          echo "channel=$PIN" >> "$GITHUB_OUTPUT"
+
+      - name: Install pinned Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ steps.pin.outputs.channel }}
+          components: clippy, rustfmt, rust-src
+
+      - name: Verify toolchain pin
+        run: |
+          PIN="${{ steps.pin.outputs.channel }}"
+          ACTUAL=$(rustc --version)
+          echo "pinned channel    : $PIN"
+          echo "rustc --version   : $ACTUAL"
+          echo "active toolchain  : $(rustup show active-toolchain 2>/dev/null || echo 'rustup unavailable')"
+          if ! echo "$ACTUAL" | grep -q "^rustc ${PIN}"; then
+            echo "::error::CI toolchain (${ACTUAL}) does not match rust-toolchain.toml pin (${PIN})"
+            exit 1
+          fi
 
       - name: Cache Rust dependencies
         uses: actions/cache@v4
@@ -154,21 +268,26 @@ jobs:
           cd tests/docker
           docker build -t consortium-ssh-node -f Dockerfile.ssh-node .
 
+      # `continue-on-error` was never set on these two, but both ended in
+      # `|| true`, and both named a package that does not exist (`consortium`
+      # vs `consortium-crate`), so neither had ever run a test.
       - name: Run integration tests (small cluster — 6 nodes)
         run: |
-          cargo test -p consortium \
+          set -o pipefail
+          cargo test -p consortium-crate \
             --features docker-tests \
             --test docker_integration \
+            --no-fail-fast \
             -- --test-threads=1 \
-            -Z unstable-options --format json 2>&1 | tee results-integration.json || true
+            -Z unstable-options --format json 2>&1 | tee results-integration.json
 
       - name: Run integration tests (large cluster — 33 nodes)
         run: |
-          cargo test -p consortium \
+          cargo test -p consortium-crate \
             --features docker-tests \
             --test docker_integration \
-            "test_scale" \
-            -- --test-threads=1 || true
+            --no-fail-fast \
+            test_scale -- --test-threads=1
 
       - name: Cleanup Docker containers
         if: always()
