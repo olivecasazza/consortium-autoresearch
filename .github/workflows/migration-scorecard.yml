@@ -95,6 +95,23 @@ jobs:
           fi
 
       # ── Build ──────────────────────────────────────────────────
+      # CON-97 canary (v2). Written *outside* tests/ because
+      # harness/sync_upstream_tests.sh rsyncs --delete over tests/, and passed to
+      # pytest as an explicit argument so it is collected FIRST: pytest sorts the
+      # tests/ glob case-sensitively, so any test_*.py under tests/ is collected
+      # after CLIClushTest.py -- and the pre-existing CLIClushTest failure aborts
+      # the whole pytest process at ~5% (exit 1, no summary, no junit-xml). In
+      # canary/python-red v1 the canary therefore never ran and the red step was
+      # ambiguous -- it was the pre-existing abort, not the canary.
+      - name: CON-97 canary (deliberately failing Python test)
+        run: |
+          mkdir -p con97_canary
+          cat > con97_canary/test_canary_red.py <<'PYEOF'
+          def test_con97_canary_deliberate_failure():
+              assert False, "CON-97 canary: a red Python test must be a red step"
+          PYEOF
+          ls -l con97_canary/test_canary_red.py
+
       - name: Build PyO3 bindings
         run: |
           cd crates/consortium-py
@@ -151,7 +168,7 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}/lib
         run: |
           source .venv/bin/activate
-          python -m pytest tests/ -v \
+          python -m pytest con97_canary/test_canary_red.py tests/ -v \
             --timeout=30 \
             --tb=short \
             --junit-xml=results/python-original.xml
@@ -174,7 +191,7 @@ jobs:
           CONSORTIUM_BACKEND: rust
         run: |
           source .venv/bin/activate
-          python -m pytest tests/ -v \
+          python -m pytest con97_canary/test_canary_red.py tests/ -v \
             --timeout=30 \
             --tb=short \
             --junit-xml=results/python-rust.xml
