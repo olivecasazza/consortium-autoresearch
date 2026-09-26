@@ -635,3 +635,14 @@ fn test_dag_executor_nix_pipeline_with_cache() {
 
     stop_container("nix-int-pipeline");
 }
+
+// ─── CON-97 canary ───────────────────────────────────────────────────────────
+#[test]
+fn con97_canary_deliberate_failure() {
+    assert_eq!(
+        2 + 2,
+        5,
+        "CON-97 canary: this test is red on purpose so the tool-integration job \
+         and its JUnit gate go red."
+    );
+}
