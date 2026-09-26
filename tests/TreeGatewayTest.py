@@ -2,9 +2,11 @@
 Unit test for ClusterShell.Gateway
 """
 
+import base64
 import logging
 import os
 import re
+import select
 import unittest
 import xml.sax
 
@@ -14,15 +16,19 @@ from ClusterShell.Communication import ConfigurationMessage, ControlMessage, \
     TimeoutMessage, StartMessage, EndMessage, XMLReader
 from ClusterShell.Gateway import GatewayChannel
 from ClusterShell.NodeSet import NodeSet
+from ClusterShell.Propagation import PropagationChannel
 from ClusterShell.Task import Task, task_self
-from ClusterShell.Topology import TopologyGraph
+from ClusterShell.Topology import TopologyError, TopologyGraph
 from ClusterShell.Worker.Tree import TreeWorker
 from ClusterShell.Worker.Worker import StreamWorker
 
-from TLib import HOSTNAME
+from .TLib import HOSTNAME
 
-# live logging with nosetests --nologcapture
+# enable live DEBUG logging when running the tests
 logging.basicConfig(level=logging.DEBUG)
+
+# max time (secs) to wait for a gateway reply before failing the test
+RECV_TIMEOUT = 30
 
 
 class Gateway(object):
@@ -59,7 +65,9 @@ class Gateway(object):
         self.send(msgstr.encode())
 
     def recv(self):
-        """recv buf from pseudo stdout (blocking call)"""
+        """recv buf from pseudo stdout (blocking call with timeout)"""
+        if not select.select([self.pipe_stdout[0]], [], [], RECV_TIMEOUT)[0]:
+            raise RuntimeError("no gateway reply after %ds" % RECV_TIMEOUT)
         return os.read(self.pipe_stdout[0], 4096)
 
     def wait(self):
@@ -256,13 +264,23 @@ class TreeGatewayTest(TreeGatewayBaseTest):
     def test_err_unknown_msg(self):
         """test gateway unknown message"""
         self._check_channel_err('<message msgid="24" type="ABC"></message>',
-                                'Unknown message type',
+                                'Unknown message type ABC',
                                 openchan=False)
 
     def test_channel_err_unknown_msg(self):
         """test gateway channel unknown message"""
         self._check_channel_err('<message msgid="24" type="ABC"></message>',
-                                'Unknown message type')
+                                'Unknown message type ABC')
+
+    def test_channel_err_no_type_msg(self):
+        """test gateway channel message with no type"""
+        self._check_channel_err('<message msgid="24"></message>',
+                                'Unknown message with no type')
+
+    def test_channel_err_empty_type_msg(self):
+        """test gateway channel message with empty type"""
+        self._check_channel_err('<message msgid="24" type=""></message>',
+                                'Unknown message with no type')
 
     def test_err_xml_malformed(self):
         """test gateway malformed xml message"""
@@ -308,7 +326,7 @@ class TreeGatewayTest(TreeGatewayBaseTest):
         """test gateway channel message missing payload"""
         self._check_channel_err(
             '<message msgid="14" type="CFG" gateway="n1"></message>',
-            'Message CFG has an invalid payload')
+            re.compile(r'Message CFG has an invalid payload'))
 
     def test_channel_err_unexpected_pl(self):
         """test gateway channel message unexpected payload"""
@@ -321,14 +339,23 @@ class TreeGatewayTest(TreeGatewayBaseTest):
         # Generate TypeError (py2) or binascii.Error (py3)
         self._check_channel_err(
             '<message msgid="14" type="CFG" gateway="n1">bar</message>',
-            'Message CFG has an invalid payload')
+            re.compile(r'Message CFG has an invalid payload'))
 
     def test_channel_err_badenc_pickle_pl(self):
         """test gateway channel message badly encoded payload (pickle)"""
         # Generate pickle error
         self._check_channel_err(
             '<message msgid="14" type="CFG" gateway="n1">barm</message>',
-            'Message CFG has an invalid payload')
+            re.compile(r'Message CFG has an invalid payload'))
+
+    def test_channel_err_pickle_proto_pl(self):
+        """test gateway channel message payload with unknown pickle protocol"""
+        # Generate ValueError (unsupported pickle protocol: 7)
+        payload = base64.b64encode(b'\x80\x07spam').decode()
+        self._check_channel_err(
+            '<message msgid="14" type="CFG" gateway="n1">%s</message>'
+            % payload,
+            re.compile(r'Message CFG has an invalid payload'))
 
     def test_channel_basic_abort(self):
         """test gateway channel aborted while opened"""
@@ -482,3 +509,112 @@ class TreeGatewayTest(TreeGatewayBaseTest):
         """test gateway channel write multi (remote=False)"""
         self._check_channel_ctl_shell("cat", "n[10-49]", True, False,
                                       StdOutMessage, b"ok", write_buf=b"ok\n")
+
+
+class TreeMessageTest(unittest.TestCase):
+    """test tree communication messages (no gateway needed)"""
+
+    def test_msg_pickle_protocol(self):
+        """test message payload pickle protocol pin (wire format)"""
+        msg = ConfigurationMessage('n1')
+        msg.data_encode({'foo': 'bar'})
+        raw = base64.b64decode(msg.data)
+        # pickle protocol 2+ starts with PROTO opcode then protocol number
+        self.assertEqual(raw[0:1], b'\x80')
+        self.assertLessEqual(bytearray(raw)[1], 4)  # bytearray for py2 compat
+        self.assertEqual(msg.data_decode(), {'foo': 'bar'})
+
+
+class ChannelWorkerStub(object):
+    """stub channel worker for head-side channel tests"""
+
+    def __init__(self):
+        self.aborted = False
+
+    def write(self, buf, sname=None):
+        return len(buf)
+
+    def abort(self):
+        self.aborted = True
+
+
+class MetaWorkerStub(object):
+    """stub metaworker recording remote node messages"""
+
+    def __init__(self):
+        self.msglines = []
+
+    def _on_remote_node_msgline(self, node, msg, sname, gateway):
+        self.msglines.append((node, msg, sname, gateway))
+
+
+class TreeHeadChannelErrorTest(unittest.TestCase):
+    """test head-side (initiator) channel errors (no gateway needed)"""
+
+    def setUp(self):
+        self.chan = PropagationChannel(task_self(), 'gw1')
+        self.chan.worker = ChannelWorkerStub()
+        self.mw = MetaWorkerStub()
+        self.chan.workers[id(self.mw)] = self.mw
+        # gateway greeting opens the channel
+        self.chan.ev_read(self.chan.worker, 'gw1', self.chan.SNAME_READER,
+                          ('<channel version="%s">' % __version__).encode())
+        self.assertTrue(self.chan.opened)
+
+    def test_head_channel_err_invalid_tag(self):
+        """test head channel invalid tag reported as stderr"""
+        self.chan.ev_read(self.chan.worker, 'gw1', self.chan.SNAME_READER,
+                          b'<foo></foo>')
+        [(node, msg, sname, gateway)] = self.mw.msglines
+        self.assertEqual(node, 'gw1')
+        self.assertEqual(msg, b'Invalid starting tag foo')
+        self.assertEqual(sname, 'stderr')
+        self.assertEqual(gateway, 'gw1')
+        # fatal channel error: channel must be closed
+        self.assertTrue(self.chan.worker.aborted)
+        self.assertFalse(self.chan.opened)
+
+    def test_head_channel_err_parse_error(self):
+        """test head channel parse error reported as stderr"""
+        self.chan.ev_read(self.chan.worker, 'gw1', self.chan.SNAME_READER,
+                          b'<message type="ABC"</message>')
+        [(node, msg, sname, gateway)] = self.mw.msglines
+        self.assertEqual(node, 'gw1')
+        self.assertTrue(isinstance(msg, bytes))
+        self.assertIn(b'not well-formed', msg)
+        self.assertEqual(sname, 'stderr')
+        self.assertEqual(gateway, 'gw1')
+        # fatal channel error: channel must be closed
+        self.assertTrue(self.chan.worker.aborted)
+        self.assertFalse(self.chan.opened)
+
+    def test_head_channel_gw_error_before_setup(self):
+        """test gateway error before setup reported as stderr"""
+        self.chan.ev_read(self.chan.worker, 'gw1', self.chan.SNAME_READER,
+                          b'<message type="ERR" msgid="0" reason="Message CFG '
+                          b'has an invalid payload (unsupported pickle '
+                          b'protocol: 5)"></message>')
+        [(node, msg, sname, gateway)] = self.mw.msglines
+        self.assertEqual(node, 'gw1')
+        self.assertEqual(msg, b'Message CFG has an invalid payload'
+                              b' (unsupported pickle protocol: 5)')
+        self.assertEqual(sname, 'stderr')
+        self.assertEqual(gateway, 'gw1')
+
+    def test_head_channel_gw_error_empty_reason(self):
+        """test gateway error with empty reason reported as empty line"""
+        self.chan.ev_read(self.chan.worker, 'gw1', self.chan.SNAME_READER,
+                          b'<message type="ERR" msgid="0" reason=""></message>')
+        self.assertEqual(self.mw.msglines, [('gw1', b'', 'stderr', 'gw1')])
+
+    def test_head_channel_gw_error_after_setup(self):
+        """test gateway error after setup raises TopologyError"""
+        # gateway ACK completes channel setup
+        self.chan.ev_read(self.chan.worker, 'gw1', self.chan.SNAME_READER,
+                          b'<message type="ACK" msgid="0" ack="0"></message>')
+        self.assertTrue(self.chan.setup)
+        self.assertRaises(TopologyError, self.chan.ev_read, self.chan.worker,
+                          'gw1', self.chan.SNAME_READER,
+                          b'<message type="ERR" msgid="1" reason="bad news">'
+                          b'</message>')
+        self.assertEqual(self.mw.msglines, [])

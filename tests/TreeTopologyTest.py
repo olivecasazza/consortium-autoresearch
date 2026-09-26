@@ -4,6 +4,7 @@
 """Unit test for Topology"""
 
 import unittest
+import warnings
 from tempfile import NamedTemporaryFile
 from textwrap import dedent
 
@@ -16,7 +17,7 @@ from ClusterShell.Topology import *
 from ClusterShell.NodeSet import NodeSet, set_std_group_resolver
 from ClusterShell.NodeSet import set_std_group_resolver_config
 from ClusterShell.NodeUtils import GroupResolverConfig
-from TLib import make_temp_file
+from .TLib import make_temp_file
 
 
 class TopologyTest(unittest.TestCase):
@@ -249,7 +250,12 @@ class TopologyTest(unittest.TestCase):
             tmpfile.write(b'nodes[0-1]: nodes[2-5]\n')
             tmpfile.write(b'nodes[4-5]: nodes[6-9]\n')
             tmpfile.flush()
-            parser = TopologyParser(tmpfile.name)
+            # NOTE: use self.assertWarns() once Python 2 is dropped (py3.2+)
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always")
+                parser = TopologyParser(tmpfile.name)
+                self.assertEqual(len(w), 1)
+                self.assertTrue(issubclass(w[0].category, DeprecationWarning))
 
             parser.tree('admin')
             ns_all = NodeSet('admin,nodes[0-9]')

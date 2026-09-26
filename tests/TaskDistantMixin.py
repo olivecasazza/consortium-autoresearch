@@ -7,7 +7,7 @@ import pwd
 import unittest
 import warnings
 
-from TLib import HOSTNAME, make_temp_filename, make_temp_dir
+from .TLib import HOSTNAME, make_temp_filename, make_temp_dir
 from ClusterShell.Event import EventHandler
 from ClusterShell.Task import *
 from ClusterShell.Worker.Ssh import WorkerSsh
@@ -307,7 +307,7 @@ class TaskDistantMixin(object):
     def testShellEventsReadNoEOL(self):
         # init worker
         test_eh = self.__class__.TEventHandlerChecker(self)
-        worker = self._task.shell("/bin/echo -n okay", nodes=HOSTNAME, handler=test_eh)
+        worker = self._task.shell("printf okay", nodes=HOSTNAME, handler=test_eh)
         # run task
         self._task.resume()
         # test events received: start, close

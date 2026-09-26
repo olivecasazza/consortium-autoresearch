@@ -4,6 +4,7 @@
 """Unit test for RangeSet"""
 
 import binascii
+import copy
 import pickle
 import unittest
 import warnings
@@ -28,6 +29,12 @@ class RangeSetTest(unittest.TestCase):
         self._testRS("1-3", "1-3", 3)
         self._testRS("1-3,4-6", "1-6", 6)
         self._testRS("1-3,4-6,7-10", "1-10", 10)
+
+    def testParseUnicode(self):
+        """test RangeSet unicode pattern parsing"""
+        # Python 2 compat
+        self.assertEqual(RangeSet(u"01-10"), RangeSet("01-10"))
+        self.assertEqual(len(RangeSet(u"0001-0100")), 100)
 
     def testStepSimple(self):
         """test RangeSet simple step usages"""
@@ -455,6 +462,43 @@ class RangeSetTest(unittest.TestCase):
         self.assertEqual(r2[33], '106')
         self.assertRaises(TypeError, r2.__getitem__, "foo")
 
+    def testIndex(self):
+        """test RangeSet.index()"""
+        r1 = RangeSet("1-100,102,105-242,800")
+        # index() is the reverse of __getitem__()
+        for i in range(len(r1)):
+            self.assertEqual(r1.index(r1[i]), i)
+        # accept both string and integer arguments
+        self.assertEqual(r1.index('1'), 0)
+        self.assertEqual(r1.index(1), 0)
+        self.assertEqual(r1.index('102'), 100)
+        self.assertEqual(r1.index(105), 101)
+        self.assertEqual(r1.index('800'), 239)
+        self.assertEqual(r1.index(u'800'), 239)
+        # missing element raises ValueError (like list.index())
+        self.assertRaises(ValueError, r1.index, '101')
+        self.assertRaises(ValueError, r1.index, 101)
+        self.assertRaises(ValueError, r1.index, 900)
+
+        # zero-padding is significant
+        r2 = RangeSet("08-10")
+        self.assertEqual(r2.index('08'), 0)
+        self.assertEqual(r2.index('09'), 1)
+        self.assertEqual(r2.index('10'), 2)
+        self.assertEqual(r2.index(u'08'), 0)
+        self.assertRaises(ValueError, r2.index, '9')
+        self.assertRaises(ValueError, r2.index, 9)
+
+        # optional start/end search window (list.index() semantics)
+        r3 = RangeSet("0-9")
+        self.assertEqual(r3.index("5", 3), 5)
+        self.assertEqual(r3.index("5", 5), 5)
+        self.assertRaises(ValueError, r3.index, "5", 6)
+        self.assertEqual(r3.index("8", -3), 8)
+        self.assertEqual(r3.index("5", 0, 6), 5)
+        self.assertRaises(ValueError, r3.index, "5", 0, 5)
+        self.assertRaises(ValueError, r3.index, "9", 0, -1)
+
     def testGetSlice(self):
         """test RangeSet.__getitem__() with slice"""
         r0 = RangeSet("1-12")
@@ -554,9 +598,10 @@ class RangeSetTest(unittest.TestCase):
         self.assertEqual(r2[5:10:2], RangeSet("12-28/8", autostep=2))
         self.assertEqual(r2[1:12:3], RangeSet("3,9,20,32"))
 
-        # FIXME: use nosetests/@raises to do that...
-        self.assertRaises(TypeError, r1.__getitem__, slice('foo', 'bar'))
-        self.assertRaises(TypeError, r1.__getitem__, slice(1, 3, 'bar'))
+        with self.assertRaises(TypeError):
+            r1[slice('foo', 'bar')]
+        with self.assertRaises(TypeError):
+            r1[slice(1, 3, 'bar')]
 
         r3 = RangeSet("0-600")
         self.assertEqual(r3[30:389], RangeSet("30-388"))
@@ -607,6 +652,11 @@ class RangeSetTest(unittest.TestCase):
         r1.padding = 4  # 1.8-1.9 compat: adjust padding of the whole set
         self.assertEqual(len(r1), 241)
         self.assertEqual(str(r1), "0001-0100,0102,0105-0242,0800-0801")
+        # unicode element accepted like byte str (Python 2 compat)
+        ra, rb = RangeSet("1-10"), RangeSet("1-10")
+        ra.add(u"011")
+        rb.add("011")
+        self.assertEqual(ra, rb)
 
     def testUpdate(self):
         """test RangeSet.update()"""
@@ -658,6 +708,13 @@ class RangeSetTest(unittest.TestCase):
         self.assertRaises(KeyError, r1.remove, "101")
         r1.remove("106")
         self.assertRaises(KeyError, r1.remove, "foo")
+        # unicode element accepted like byte str (Python 2 compat)
+        ra, rb = RangeSet("1-10"), RangeSet("1-10")
+        ra.remove(u"5")
+        rb.remove("5")
+        self.assertEqual(ra, rb)
+        self.assertRaises(KeyError, ra.remove, u"5")
+        self.assertRaises(KeyError, ra.remove, u"foo")
 
     def testDiscard(self):
         """test RangeSet.discard()"""
@@ -671,6 +728,13 @@ class RangeSetTest(unittest.TestCase):
         self.assertEqual(len(r1), 238)
         self.assertEqual(str(r1), "1-99,102,106-242,800")
         r1.discard("foo")
+        # unicode element accepted like byte str (Python 2 compat)
+        ra, rb = RangeSet("1-10"), RangeSet("1-10")
+        ra.discard(u"5")
+        rb.discard("5")
+        ra.discard(u"bar")  # non-numeric unicode: no exception
+        self.assertEqual(ra, rb)
+        self.assertEqual(str(ra), "1-4,6-10")
 
     def testClear(self):
         """test RangeSet.clear()"""
@@ -1043,6 +1107,21 @@ class RangeSetTest(unittest.TestCase):
         self.assertEqual(rngset[0], '1')
         self.assertEqual(rngset[1], '2')
         self.assertEqual(rngset[-1], '100')
+
+    def test_pickle_empty(self):
+        """test empty RangeSet pickling"""
+        rngset = pickle.loads(pickle.dumps(RangeSet(autostep=3)))
+        self.assertEqual(rngset, RangeSet())
+        self.assertEqual(str(rngset), "")
+        self.assertEqual(len(rngset), 0)
+        self.assertEqual(rngset.autostep, 3)
+
+    def test_deepcopy_empty(self):
+        """test empty RangeSet deepcopy (uses __reduce__ too)"""
+        rngset = copy.deepcopy(RangeSet())
+        self.assertEqual(rngset, RangeSet())
+        self.assertEqual(str(rngset), "")
+        self.assertEqual(len(rngset), 0)
 
     def testIntersectionLength(self):
         """test RangeSet intersection/length"""

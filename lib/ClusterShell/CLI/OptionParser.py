@@ -151,7 +151,7 @@ class OptionParser(optparse.OptionParser):
         optgrp.add_option("-L", action="store_true", dest="line_mode",
             help="disable header block and order output by nodes")
         optgrp.add_option("-N", action="store_false", dest="label",
-            default=True, help="disable labeling of command line")
+            default=True, help="disable labeling of command output")
         if dshbak_compat:
             optgrp.add_option("-b", "-c", "--dshbak", action="store_true",
                 dest="gather", help="gather nodes with same output")
@@ -165,6 +165,10 @@ class OptionParser(optparse.OptionParser):
         optgrp.add_option("-r", "--regroup", action="store_true",
                           dest="regroup", default=False,
                           help="fold nodeset using node groups")
+        optgrp.add_option("--axis", action="store", dest="axis",
+                          metavar="RANGESET",
+                          help="fold along these axis only "
+                               "(axis 1..n for nD nodeset)")
 
         if separator_option:
             optgrp.add_option("-S", "--separator", action="store",
@@ -275,6 +279,9 @@ class OptionParser(optparse.OptionParser):
                           dest="regroup", default=False,
                           help="fold nodes using node groups (see -s "
                                "GROUPSOURCE)")
+        optgrp.add_option("--index", action="store", dest="index",
+                          metavar="NODE", type="string",
+                          help="output the index of NODE in the nodeset")
         optgrp.add_option("--list-sources", "--groupsources",
                           action="store_true", dest="groupsources",
                           default=False,

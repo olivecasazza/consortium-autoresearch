@@ -38,11 +38,11 @@ Usage example
   >>> # Remove from nodeset
   ... nodeset.difference_update("cluster[2-5,8-31]")
   >>> # Print nodeset as a pdsh-like pattern
-  ... print nodeset
+  ... print(nodeset)
   cluster[1,6-7,32]
   >>> # Iterate over node names in nodeset
   ... for node in nodeset:
-  ...     print node
+  ...     print(node)
   cluster1
   cluster6
   cluster7
@@ -446,7 +446,7 @@ class NodeSetBase(object):
                 sl_next += num
                 if (sl_next - sl_start) % sl_step:
                     sl_next = sl_start + \
-                        ((sl_next - sl_start)/sl_step + 1) * sl_step
+                        ((sl_next - sl_start)//sl_step + 1) * sl_step
                 if sl_next >= sl_stop:
                     break
                 length += cnt
@@ -478,6 +478,85 @@ class NodeSetBase(object):
             raise IndexError("%d out of range" % index)
         else:
             raise TypeError("NodeSet indices must be integers")
+
+    def _rangeset_index(self, rangeset, orangeset):
+        """Return the position of the single index held by `orangeset`
+        within `rangeset`, following the same order as iteration, or None
+        if the index is not contained in `rangeset`.
+
+        Both arguments are the RangeSet/RangeSetND/None objects respectively
+        associated to the same pattern in this nodeset and in the searched
+        single node.
+        """
+        # unnumbered node (eg. 'server'): both must have no index
+        if rangeset is None or orangeset is None:
+            return 0 if rangeset is None and orangeset is None else None
+
+        try:
+            if isinstance(orangeset, RangeSetND):
+                # nD: orangeset holds a single index vector
+                return rangeset.index(next(iter(orangeset)))
+            # 1D: orangeset holds a single (possibly zero-padded) index
+            return rangeset.index(next(orangeset.striter()))
+        except ValueError:
+            return None
+
+    def index(self, other, start=0, stop=None):
+        """Return the zero-based index in the nodeset of the node `other`.
+
+        This behaves like the ``index()`` method of the ``list`` type: it
+        returns the position of the node when iterating over the nodeset and
+        raises a :class:`ValueError` if the node is not present. The optional
+        `start` and `stop` arguments restrict the search to the matching
+        subsequence, and may be negative (counted from the end).
+
+        Unlike a naive linear search, this implementation does not expand the
+        whole nodeset: it only sums the size of the patterns that precede the
+        searched node and locates it within its own pattern.
+
+        Example:
+           >>> NodeSetBase('node%s', RangeSet('0-9,20')).index(
+           ...     NodeSetBase('node%s', RangeSet('20')))
+           10
+        """
+        self._binary_sanity_check(other)
+        if len(other) != 1:
+            raise ValueError("index() argument must be a single node")
+
+        # extract the single (pattern, rangeset) of the searched node
+        opat, orangeset = list(other._patterns.items())[0]
+
+        # walk patterns in iteration order, summing sizes until we reach the
+        # pattern of the searched node
+        found = None
+        base = 0
+        for pat, rangeset in sorted(self._patterns.items()):
+            if pat == opat:
+                offset = self._rangeset_index(rangeset, orangeset)
+                if offset is not None:
+                    found = base + offset
+                break
+            if rangeset:
+                base += len(rangeset)
+            else:
+                base += 1
+
+        if found is None:
+            raise ValueError("'%s' is not in nodeset" % other)
+
+        # honor optional start/stop search window (list.index() semantics)
+        if start != 0 or stop is not None:
+            length = len(self)
+            if start < 0:
+                start = max(0, length + start)
+            if stop is None:
+                stop = length
+            elif stop < 0:
+                stop = max(0, length + stop)
+            if not start <= found < stop:
+                raise ValueError("'%s' is not in nodeset" % other)
+
+        return found
 
     def _add_new(self, pat, rangeset):
         """Add nodes from a (pat, rangeset) tuple.
@@ -1179,7 +1258,7 @@ class NodeSet(NodeSetBase):
 
         >>> nodeset = NodeSet("blue[1-50]")
         >>> nodeset.remove("blue[36-40]")
-        >>> print nodeset
+        >>> print(nodeset)
         blue[1-35,41-50]
 
     Additionally, the NodeSet class recognizes the "extended string
@@ -1480,6 +1559,23 @@ class NodeSet(NodeSetBase):
         inst._patterns = base._patterns
         return inst
 
+    def index(self, other, start=0, stop=None):
+        """Return the zero-based index in the nodeset of the node `other`.
+
+        Like the ``index()`` method of the ``list`` type, this returns the
+        position of `other` when iterating over the nodeset and raises a
+        :class:`ValueError` if the node is not present. The optional `start`
+        and `stop` arguments restrict the search and may be negative.
+
+        The `other` argument is a single node and may be provided as a string
+        (it is parsed, so node groups are resolved if any).
+
+        >>> NodeSet("node[0-9,20]").index("node20")
+        10
+        """
+        nodeset = self._parser.parse(other, self._autostep)
+        return NodeSetBase.index(self, nodeset, start, stop)
+
     def split(self, nbr):
         """
         Split the nodeset into nbr sub-nodesets (at most). Each
@@ -1487,7 +1583,7 @@ class NodeSet(NodeSetBase):
         less 1. Current nodeset remains unmodified.
 
         >>> for nodeset in NodeSet("foo[1-5]").split(3):
-        ...     print nodeset
+        ...     print(nodeset)
         foo[1-2]
         foo[3-4]
         foo5

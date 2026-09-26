@@ -1,13 +1,19 @@
 ClusterShell Python Library and Tools
  =====================================
 
-ClusterShell is an event-driven open source Python library, designed to run
+[![HPSF Established](https://raw.githubusercontent.com/hpsfoundation/tac/main/badges/HPSF_Project_Badge_Established.png)](https://hpsf.io)
+
+This project adheres to a [Technical Charter](https://clustershell.readthedocs.io/en/latest/CHARTER.html), which defines its governance model, decision-making process, and long-term vision.
+
+ClusterShell is an event-driven open source Python library designed to run
 local or distant commands in parallel on server farms or on large Linux
-clusters. It will take care of common issues encountered on HPC clusters, such
-as operating on groups of nodes, running distributed commands using optimized
-execution algorithms, as well as gathering results and merging identical
-outputs, or retrieving return codes. ClusterShell takes advantage of existing
-remote shell facilities already installed on your systems, like SSH.
+clusters. It is an [HPSF Established](https://hpsf.io) project under
+[LF Europe](https://linuxfoundation.eu/) stewardship.
+
+ClusterShell handles typical HPC cluster administration tasks: operating on
+groups of nodes, executing distributed commands with optimized algorithms,
+gathering and merging output, and collecting return codes. It leverages remote
+shell facilities already present on your systems, such as SSH.
 
 ClusterShell's primary goal is to improve the administration of high-
 performance clusters by providing a lightweight but scalable Python API for
@@ -58,7 +64,7 @@ For full details, see [CONVENTIONAL_COMMITS.md](./CONVENTIONAL_COMMITS.md).
 Requirements
 ------------
 
- * GNU/Linux, BSD, Mac OS X
+ * GNU/Linux, BSD, macOS
  * OpenSSH (ssh/scp) or rsh
  * Python 2.x (x >= 7) or Python 3.x (x >= 6)
  * PyYAML
@@ -74,12 +80,12 @@ Documentation
 
 Online documentation is available here:
 
-    http://clustershell.readthedocs.org/
+    https://clustershell.readthedocs.io/
 
 The Sphinx documentation source is available under the doc/sphinx directory.
-Type 'make' to see all available formats (you need Sphinx installed and
-sphinx_rtd_theme to build the documentation). For example, to generate html
-docs, just type:
+Type 'make' to see all available formats (you need the packages listed in
+doc/sphinx/requirements.txt to build the documentation). For example, to
+generate html docs, just type:
 
     make html BUILDDIR=/dest/path
 
@@ -89,16 +95,36 @@ For local library API documentation, just type:
 
 The following man pages are also provided:
 
-    clush(1), clubak(1), nodeset(1), clush.conf(5), groups.conf(5)
+    clush(1), clubak(1), cluset(1), nodeset(1), clush.conf(5), groups.conf(5)
+
+Building
+--------
+
+To build the Python source distribution and wheel from a source checkout:
+
+    $ python -m build
+
+The resulting tarball and wheel are written to the 'dist' directory.
+
+RPM packaging is not maintained in this repository. RPM packages for Fedora,
+RHEL and compatible distributions are maintained in the Fedora and EPEL
+dist-git repositories:
+
+    https://src.fedoraproject.org/rpms/clustershell
+
+To build RPMs locally, use that spec file, for example with 'fedpkg' or
+'rpmbuild'.
 
 Test Suite
 ----------
 
-Regression testing scripts are available in the 'tests' directory:
+Regression testing scripts are available in the 'tests' directory. To run the
+whole test suite from the source tree root:
 
-    $ cd tests
-    $ nosetests -sv <Test.py>
-    $ nosetests -sv --all-modules
+    $ python -m unittest discover -v -s tests -p '*Test.py' -t .
+
+To run a single test module, narrow the discovery pattern, for example
+`-p 'NodeSetTest.py'`.
 
 You have to allow 'ssh localhost' and 'ssh $HOSTNAME' without any warnings for
 "remote" tests to run as expected. $HOSTNAME should not be 127.0.0.1 nor ::1.
@@ -112,43 +138,32 @@ Python code (simple example)
 >>> from ClusterShell.NodeSet import NodeSet
 >>> task = task_self()
 >>> task.run("/bin/uname -r", nodes="linux[4-6,32-39]")
-<ClusterShell.Worker.Ssh.WorkerSsh object at 0x20a5e90>
+<ClusterShell.Worker.Ssh.WorkerSsh object at 0x7f45287db910>
 >>> for buf, key in task.iter_buffers():
-...     print NodeSet.fromlist(key), buf
+...     print(NodeSet.fromlist(key), buf.message().decode())
 ... 
-linux[32-39] 2.6.40.6-0.fc15.x86_64
-
-linux[4-6] 2.6.32-71.el6.x86_64
+linux[32-39] 6.14.9-300.fc42.x86_64
+linux[4-6] 5.14.0-570.12.1.el9_6.x86_64
 ```
 
 Links
 -----
 
-Web site:
-
-    http://cea-hpc.github.com/clustershell/
-
 Online documentation:
 
-    http://clustershell.readthedocs.org/
+    https://clustershell.readthedocs.io/
 
 Github source repository:
 
-    https://github.com/cea-hpc/clustershell
-
-Github Wiki:
-
-    https://github.com/cea-hpc/clustershell/wiki
+    https://github.com/clustershell/clustershell
 
 Github Issue tracking system:
 
-    https://github.com/cea-hpc/clustershell/issues
+    https://github.com/clustershell/clustershell/issues
 
 Python Package Index (PyPI) links:
 
     https://pypi.org/project/ClusterShell/
-
-    http://pypi.python.org/pypi/ClusterShell
 
 ClusterShell was born along with Shine, a scalable Lustre FS admin tool:
 
@@ -159,7 +174,16 @@ Core developers/reviewers
 
 * Stephane Thiell
 * Aurelien Degremont
-* Henri Doreau
 * Dominique Martinet
 
-CEA/DAM 2010, 2011, 2012, 2013, 2014, 2015 - http://www-hpc.cea.fr
+Acknowledgments
+---------------
+
+We would like to express our gratitude to [CEA](https://www.cea.fr/english)
+for the resources and funding provided to the project over the years.
+
+We would also like to thank [Stanford University](https://srcc.stanford.edu)
+(SRC) for their long-term support and resources provided to the project.
+
+See the full [Acknowledgments](https://clustershell.readthedocs.io/en/latest/acknowledgments.html)
+page for more details.

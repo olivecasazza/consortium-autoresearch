@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 #
 # Copyright (C) 2008-2016 CEA/DAM
-# Copyright (C) 2016-2025 Stephane Thiell <sthiell@stanford.edu>
+# Copyright (C) 2016-2026 Stephane Thiell <sthiell@stanford.edu>
 #
 # This file is part of ClusterShell.
 #
@@ -23,7 +23,7 @@ import os
 from setuptools import setup, find_packages
 
 
-VERSION = '1.9.3'
+VERSION = '1.10.1'
 
 CFGDIR = 'etc/clustershell'
 MANDIR = 'share/man'
@@ -44,7 +44,8 @@ setup(name='ClusterShell',
                     'conf/clush.conf.d/sudo.conf.example',
                     'conf/clush.conf.d/README']),
                   (os.path.join(CFGDIR, 'groups.conf.d'),
-                   ['conf/groups.conf.d/genders.conf.example',
+                   ['conf/groups.conf.d/ansible.conf.example',
+                    'conf/groups.conf.d/genders.conf.example',
                     'conf/groups.conf.d/slurm.conf.example',
                     'conf/groups.conf.d/xcat.conf.example',
                     'conf/groups.conf.d/README']),
@@ -68,14 +69,14 @@ setup(name='ClusterShell',
                      'nodeset=ClusterShell.CLI.Nodeset:main'],
                    },
       author='Stephane Thiell',
-      author_email='sthiell@stanford.edu',
       license='LGPLv2+',
       url='https://clustershell.readthedocs.io/',
-      download_url='https://github.com/cea-hpc/clustershell/archive/refs/tags/v%s.tar.gz' % VERSION,
+      download_url='https://github.com/clustershell/clustershell/archive/refs/tags/v%s.tar.gz' % VERSION,
       platforms=['GNU/Linux', 'BSD', 'MacOSX'],
       keywords=['clustershell', 'clush', 'clubak', 'nodeset'],
       description='ClusterShell library and tools',
       long_description=open('doc/txt/clustershell.rst').read(),
+      long_description_content_type='text/x-rst',
       classifiers=[
           "Development Status :: 5 - Production/Stable",
           "Environment :: Console",

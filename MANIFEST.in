@@ -18,7 +18,6 @@ include doc/man/man1/*.1
 include doc/man/man5/*.5
 include doc/sphinx/Makefile
 include doc/sphinx/conf.py
-include doc/sphinx/*.png
 include doc/sphinx/*.rst
 include doc/sphinx/_static/*.png
 include doc/sphinx/_static/*.css
@@ -30,6 +29,5 @@ include doc/extras/vim/syntax/*.vim
 include doc/extras/vim/ftdetect/*.vim
 include doc/examples/*.py
 include doc/examples/defaults.conf-rsh
-include doc/epydoc/*.conf
 include tests/*.py
 include tests/bin/*

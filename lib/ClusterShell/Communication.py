@@ -47,6 +47,8 @@ try:
 except ImportError:  # Python 2 compat
     import cPickle
 
+from pickle import HIGHEST_PROTOCOL
+
 import base64
 import binascii
 import logging
@@ -74,6 +76,10 @@ ENCODING = 'utf-8'
 
 # See Message.data_encode()
 DEFAULT_B64_LINE_LENGTH = 65536
+
+# Gateway messages may cross Python versions within a tree: cap the pickle
+# protocol at 4, readable since Python 3.4 (Python 2 writes protocol 2)
+GW_PICKLE_PROTOCOL = min(HIGHEST_PROTOCOL, 4)
 
 
 class MessageProcessingError(Exception):
@@ -142,11 +148,15 @@ class XMLReader(ContentHandler):
             RoutingMessage.ident: RoutingMessage,
         }
         try:
-            msg_type = attributes['type']
+            msg_type = attributes.get('type')
             # select the good constructor
             ctor = ctors_map[msg_type]
         except KeyError:
-            raise MessageProcessingError('Unknown message type')
+            if msg_type:
+                ex_msg = "Unknown message type %s" % msg_type
+            else:
+                ex_msg = "Unknown message with no type"
+            raise MessageProcessingError(ex_msg)
         # build message with its attributes
         self._draft = ctor()
         self._draft.selfbuild(attributes)
@@ -234,7 +244,7 @@ class Channel(EventHandler):
             self.logger.error("SAXParseException: %s: %s", ex.getMessage(), msg)
             # Warning: do not send malformed raw message back
             if self.initiator:
-                self.recv(StdErrMessage(node, ex.getMessage()))
+                self.recv(StdErrMessage(node, ex.getMessage().encode(ENCODING)))
             else:
                 # target, not initiator: we can send an error message back
                 self.send(ErrorMessage('Parse error: %s' % ex.getMessage()))
@@ -242,9 +252,10 @@ class Channel(EventHandler):
             self._close()
             return
         except MessageProcessingError as ex:
-            self.logger.error("MessageProcessingError: %s", ex)
+            self.logger.error("MessageProcessingError: %s (initiator=%s)",
+                              ex, self.initiator)
             if self.initiator:
-                self.recv(StdErrMessage(node, str(ex)))
+                self.recv(StdErrMessage(node, str(ex).encode(ENCODING)))
             else:
                 # target, not initiator: we can send an error message back
                 self.send(ErrorMessage(str(ex)))
@@ -293,7 +304,7 @@ class Message(object):
         # Base64 transfer encoding for MIME mandates a fixed line length
         # of 76 characters, which is way too small for our per-line ev_read
         # mechanism. So use b64encode() here instead of encodestring().
-        encoded = base64.b64encode(cPickle.dumps(inst))
+        encoded = base64.b64encode(cPickle.dumps(inst, GW_PICKLE_PROTOCOL))
 
         # We now follow relaxed RFC-4648 for base64, but we still add some
         # newlines to very long lines to avoid memory pressure (eg. --rcopy).
@@ -311,10 +322,11 @@ class Message(object):
         # if self.data is None then an exception is raised here
         try:
             return cPickle.loads(base64.b64decode(self.data))
-        except (EOFError, TypeError, cPickle.UnpicklingError, binascii.Error):
+        except (EOFError, TypeError, ValueError, cPickle.UnpicklingError,
+                binascii.Error) as exc:
             # raised by cPickle.loads() if self.data is not valid
             raise MessageProcessingError('Message %s has an invalid payload'
-                                         % self.ident)
+                                         ' (%s)' % (self.ident, exc))
 
     def data_update(self, raw):
         """append data to the instance (used for deserialization)"""

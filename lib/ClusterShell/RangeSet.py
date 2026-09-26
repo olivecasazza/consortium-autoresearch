@@ -30,6 +30,24 @@ from functools import reduce
 from itertools import product
 from operator import mul
 
+# Python 3 compatibility
+try:
+    basestring
+except NameError:
+    basestring = str
+
+
+def _normalized_index_bounds(length, start, stop):
+    """Return list.index()-like normalized start/stop bounds."""
+    if start < 0:
+        start = max(0, length + start)
+    if stop is None:
+        stop = length
+    elif stop < 0:
+        stop = max(0, length + stop)
+    return start, stop
+
+
 __all__ = ['RangeSetException',
            'RangeSetParseError',
            'RangeSetPaddingError',
@@ -111,7 +129,7 @@ class RangeSet(set):
         """
         set.__init__(self)
 
-        if pattern is not None and not isinstance(pattern, str):
+        if pattern is not None and not isinstance(pattern, basestring):
             pattern = ",".join("%s" % i for i in pattern)
 
         if isinstance(pattern, RangeSet):
@@ -120,7 +138,7 @@ class RangeSet(set):
             self._autostep = None
         self.autostep = autostep #: autostep threshold public instance attribute
 
-        if isinstance(pattern, str):
+        if isinstance(pattern, basestring):
             self._parse(pattern)
 
     def _parse(self, pattern):
@@ -281,12 +299,18 @@ class RangeSet(set):
         the object is empty, in that case it will return 0."""
         return int(len(self) > 0)
 
+    @staticmethod
+    def _sortkey(elem):
+        """Sort key used to order RangeSet elements (mixed padding support):
+        sort by both string length and index."""
+        if elem.startswith('-'):
+            return (-len(elem), int(elem))
+        return (len(elem), elem)
+
     def _sorted(self):
         """Get sorted list from inner set."""
         # For mixed padding support, sort by both string length and index
-        return sorted(set.__iter__(self),
-                      key=lambda x: (-len(x), int(x)) if x.startswith('-') \
-                                    else (len(x), x))
+        return sorted(set.__iter__(self), key=self._sortkey)
 
     def __iter__(self):
         """Iterate over each element in RangeSet, currently as integers, with
@@ -313,7 +337,8 @@ class RangeSet(set):
 
     def __reduce__(self):
         """Return state information for pickling."""
-        return self.__class__, (str(self),), \
+        pattern = str(self) if self else None  # RangeSet("") raises by design
+        return self.__class__, (pattern,), \
             { 'padding': self.padding, \
               '_autostep': self._autostep, \
               '_version' : RangeSet._VERSION }
@@ -509,6 +534,37 @@ class RangeSet(set):
             raise TypeError("%s indices must be integers" %
                             self.__class__.__name__)
 
+    def index(self, elem, start=0, stop=None):
+        """
+        Return the zero-based index of element in the sorted RangeSet.
+
+        This is the reverse operation of :meth:`RangeSet.__getitem__` and
+        behaves like the ``index()`` method of the ``list`` type. The element
+        may be given as a string (zero-padding is then significant) or as an
+        integer. The optional `start` and `stop` arguments restrict the search
+        to the matching subsequence, and may be negative (counted from the
+        end).
+
+        :raises ValueError: the element is not present in the RangeSet
+        """
+        if isinstance(elem, basestring):
+            key = elem
+        else:
+            key = str(elem)
+        # set membership is fast and padding-aware for strings
+        if not set.__contains__(self, key):
+            raise ValueError("%s is not in RangeSet" % (elem,))
+        # Compute the rank in a single O(n) pass (no full sort) by counting
+        # the elements that come before `elem` in iteration order.
+        tkey = self._sortkey(key)
+        found = sum(1 for idx in set.__iter__(self)
+                    if self._sortkey(idx) < tkey)
+        if start != 0 or stop is not None:
+            start, stop = _normalized_index_bounds(len(self), start, stop)
+            if not start <= found < stop:
+                raise ValueError("%s is not in RangeSet" % (elem,))
+        return found
+
     def split(self, nbr):
         """
         Split the rangeset into nbr sub-rangesets (at most). Each
@@ -516,7 +572,7 @@ class RangeSet(set):
         less 1. Current rangeset remains unmodified. Returns an
         iterator.
 
-        >>> RangeSet("1-5").split(3) 
+        >>> RangeSet("1-5").split(3)
         RangeSet("1-2")
         RangeSet("3-4")
         RangeSet("foo5")
@@ -754,7 +810,7 @@ class RangeSet(set):
 
     def update(self, iterable):
         """Add all indexes (as strings) from an iterable (such as a list)."""
-        assert not isinstance(iterable, str)
+        assert not isinstance(iterable, basestring)
         set.update(self, iterable)
 
     def updaten(self, rangesets):
@@ -784,7 +840,7 @@ class RangeSet(set):
         :param element: the element to add (integer or string)
         :param pad: zero padding length (integer); ignored if element is string
         """
-        if isinstance(element, str):
+        if isinstance(element, basestring):
             set.add(self, element)
         else:
             set.add(self, "%0*d" % (pad, int(element)))
@@ -801,7 +857,7 @@ class RangeSet(set):
         :raises KeyError: element is not contained in RangeSet
         :raises ValueError: element is not castable to integer
         """
-        if isinstance(element, str):
+        if isinstance(element, basestring):
             set.remove(self, element)
         else:
             set.remove(self, "%0*d" % (pad, int(element)))
@@ -819,7 +875,7 @@ class RangeSet(set):
         :param pad: zero padding length (integer); ignored if element is string
         """
         try:
-            if isinstance(element, str):
+            if isinstance(element, basestring):
                 set.discard(self, element)
             else:
                 set.discard(self, "%0*d" % (pad, int(element)))
@@ -879,7 +935,7 @@ class RangeSetND(object):
             return
         for rgvec in args:
             if rgvec:
-                if isinstance(rgvec[0], str):
+                if isinstance(rgvec[0], basestring):
                     self._veclist.append([RangeSet(rg, autostep=autostep) \
                                           for rg in rgvec])
                 elif isinstance(rgvec[0], RangeSet):
@@ -1066,6 +1122,39 @@ class RangeSetND(object):
         else:
             raise TypeError("%s indices must be integers" %
                             self.__class__.__name__)
+
+    @precond_fold()
+    def index(self, elem, start=0, stop=None):
+        """
+        Return the zero-based index of element in this RangeSetND, following
+        iteration order. This is the reverse operation of
+        :meth:`RangeSetND.__getitem__` and behaves like the ``index()`` method
+        of the ``list`` type.
+
+        The element is a vector (tuple) of indexes, given as integers or
+        strings (zero-padding is then significant). The optional `start` and
+        `stop` arguments restrict the search to the matching subsequence, and
+        may be negative (counted from the end).
+
+        :raises TypeError: the element is not a vector of indexes
+        :raises ValueError: the element is not present in the RangeSetND
+        """
+        # a bare string or scalar is not a valid index vector: iterating over
+        # a string would otherwise wrongly split it into per-character indexes
+        # (basestring catches both str and Python 2 unicode strings)
+        if isinstance(elem, basestring) or not hasattr(elem, '__iter__'):
+            raise TypeError("%s.index() argument must be a vector of indexes"
+                            % self.__class__.__name__)
+        target = tuple("%s" % e for e in elem)
+        for pos, ivec in enumerate(self._iter()):
+            if ivec == target:
+                if start != 0 or stop is not None:
+                    start, stop = _normalized_index_bounds(len(self),
+                                                           start, stop)
+                    if not start <= pos < stop:
+                        break
+                return pos
+        raise ValueError("%s is not in RangeSetND" % (elem,))
 
     @precond_fold()
     def contiguous(self):

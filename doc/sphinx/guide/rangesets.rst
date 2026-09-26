@@ -24,12 +24,12 @@ class (`Python sets`_), and thus provides methods like :meth:`.RangeSet.union`,
 :meth:`.RangeSet.difference_update()` and
 :meth:`.RangeSet.symmetric_difference_update`.
 
-In v1.9, the implementation of zero-based padding of indexes (e.g. `001`) has
+In v1.9, the implementation of zero-based padding of indexes (e.g. ``001``) has
 been improved. The inner set contains indexes as strings with the padding
-included, which allows the use of mixed length zero-padded indexes (eg. using
-both `01` and `001` is valid and supported in the same object). Prior to v1.9,
+included, which allows the use of mixed length zero-padded indexes (e.g. using
+both ``01`` and ``001`` is valid and supported in the same object). Prior to v1.9,
 zero-padding was a simple display feature of fixed length per
-:class:`.RangeSet` object, and indexes where stored as integers in the inner
+:class:`.RangeSet` object, and indexes were stored as integers in the inner
 set.
 
 To iterate over indexes as strings with zero-padding included, you can now
@@ -39,14 +39,21 @@ To iterate over the set's indexes as integers, you may use the new method
 :meth:`.RangeSet.intiter()`, which is the equivalent of iterating over the
 :class:`.RangeSet` object before v1.9.
 
+Since v1.10, the :meth:`.RangeSet.index()` method returns the zero-based
+position of an element, the reverse of :meth:`.RangeSet.__getitem__()`
+(zero-padding is significant when the element is given as a string)::
+
+    >>> RangeSet("10-49").index("20")
+    10
+
 .. _class-RangeSetND:
 
 RangeSetND class
 ----------------
 
-The :class:`.RangeSetND` class builds a N-dimensional RangeSet mutable object
+The :class:`.RangeSetND` class builds an N-dimensional RangeSet mutable object
 and provides the common set methods. This class is public and may be used
-directly, however we think it is less convenient to manipulate that
+directly, however we think it is less convenient to manipulate than
 :class:`.NodeSet` and does not necessarily provide the same one-dimension
 optimization (see :ref:`class-NodeSet-nD`). Several constructors are
 available, using RangeSet objects, strings or individual multidimensional
@@ -59,13 +66,13 @@ tuples, for instance::
     >>> r2 = RangeSet("10-12")
     >>> r3 = RangeSet("0-4/2")
     >>> r4 = RangeSet("10-12")
-    >>> print r1, r2, r3, r4
+    >>> print(r1, r2, r3, r4)
     1,3,5 10-12 0,2,4 10-12
     >>> rnd = RangeSetND([[r1, r2], [r3, r4]])
-    >>> print rnd
+    >>> print(rnd)
     0-5; 10-12
 
-    >>> print list(rnd)
+    >>> print(list(rnd))
     [('0', '10'), ('0', '11'), ('0', '12'), ('1', '10'), ('1', '11'), ('1', '12'), ('2', '10'), ('2', '11'), ('2', '12'), ('3', '10'), ('3', '11'), ('3', '12'), ('4', '10'), ('4', '11'), ('4', '12'), ('5', '10'), ('5', '11'), ('5', '12')]
 
     >>> r1 = RangeSetND([(0, 4), (0, 5), (1, 4), (1, 5)])
@@ -83,4 +90,4 @@ tuples, for instance::
     [('1', '4'), ('1', '5')]
 
 
-.. _Python sets: http://docs.python.org/library/sets.html
+.. _Python sets: https://docs.python.org/3/library/stdtypes.html#set-types-set-frozenset

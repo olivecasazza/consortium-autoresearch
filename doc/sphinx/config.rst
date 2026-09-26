@@ -11,6 +11,11 @@ clush
 clush.conf
 ^^^^^^^^^^
 
+The *clush.conf* files are parsed with Python's `ConfigParser`_
+
+Locations
+"""""""""
+
 The following configuration file defines system-wide default values for
 several ``clush`` tool parameters::
 
@@ -29,17 +34,23 @@ the following files is found, in priority order::
    useful for Python virtual environments.
 
 In addition, if the environment variable ``$CLUSTERSHELL_CFGDIR`` is defined and
-valid, it will used instead. In such case, the following configuration file
+valid, it will be used instead. In that case, the following configuration file
 will be tried first for ``clush``::
 
     $CLUSTERSHELL_CFGDIR/clush.conf
+
+Settings
+""""""""
+
+Settings that apply to all ``clush`` :ref:`run modes <clushmode-config>` are
+contained within the ``[Main]`` section.
 
 The following table describes available ``clush`` config file settings.
 
 +-----------------+----------------------------------------------------+
 | Key             | Value                                              |
 +=================+====================================================+
-| fanout          | Size of the sliding window of connectors (eg. max  |
+| fanout          | Size of the sliding window of connectors (e.g. max |
 |                 | number of *ssh(1)* allowed to run at the same      |
 |                 | time).                                             |
 +-----------------+----------------------------------------------------+
@@ -53,12 +64,12 @@ The following table describes available ``clush`` config file settings.
 |                 | identify a section defining a mode. Duplicate      |
 |                 | modes are not allowed in those files.              |
 |                 | Configuration files that are not readable by the   |
-|                 | current user are ignored. The variable `$CFGDIR`   |
+|                 | current user are ignored. The variable ``$CFGDIR`` |
 |                 | is replaced by the path of the highest priority    |
 |                 | configuration directory found (where *clush.conf*  |
 |                 | resides). The default *confdir* value enables both |
 |                 | system-wide and any installed user configuration   |
-|                 | (thanks to `$CFGDIR`). Duplicate directory paths   |
+|                 | (thanks to ``$CFGDIR``). Duplicate directory paths |
 |                 | are ignored.                                       |
 +-----------------+----------------------------------------------------+
 | connect_timeout | Timeout in seconds to allow a connection to        |
@@ -76,17 +87,17 @@ The following table describes available ``clush`` config file settings.
 |                 | complete in less than (connect_timeout \+          |
 |                 | command_timeout). If set to 0, no timeout occurs.  |
 +-----------------+----------------------------------------------------+
-| color           | Whether  to  use  ANSI  colors  to  surround node  |
+| color           | Whether to use ANSI colors to surround node        |
 |                 | or nodeset prefix/header with escape sequences to  |
 |                 | display them in color on the terminal. Valid       |
 |                 | arguments are *never*, *always* or *auto* (which   |
-|                 | use color if standard output/error refer to a      |
+|                 | uses color if standard output/error refer to a     |
 |                 | terminal).                                         |
 |                 | Colors are set to ``[34m`` (blue foreground text)  |
 |                 | for stdout and ``[31m`` (red foreground text) for  |
 |                 | stderr, and cannot be modified.                    |
 +-----------------+----------------------------------------------------+
-| fd_max          | Maximum  number  of  open  file descriptors        |
+| fd_max          | Maximum number of open file descriptors            |
 |                 | permitted per ``clush`` process (soft resource     |
 |                 | limit for open files). This limit can never exceed |
 |                 | the system (hard) limit. The *fd_max* (soft) and   |
@@ -163,7 +174,7 @@ configuration files ending in **.conf** are scanned. If the user running
 When ``--mode`` is specified, you can display all available run modes for
 the current user by enabling debug mode (``-d``).
 
-Example of a run mode configuration file (eg.
+Example of a run mode configuration file (e.g.
 ``/etc/clustershell/clush.conf.d/sudo.conf``) to add support for interactive
 sudo::
 
@@ -193,7 +204,7 @@ groups.conf
 ^^^^^^^^^^^
 
 ClusterShell loads *groups.conf* configuration files that define how to
-obtain node groups configuration, ie. the way the library should access
+obtain node groups configuration, i.e. the way the library should access
 file-based or external node group **sources**.
 
 The following configuration file defines system-wide default values for
@@ -213,18 +224,18 @@ of the following files is found, in priority order::
    useful for Python virtual environments.
 
 In addition, if the environment variable ``$CLUSTERSHELL_CFGDIR`` is defined and
-valid, it will used instead. In such case, the following configuration file
+valid, it will be used instead. In that case, the following configuration file
 will be tried first for *groups.conf*::
 
     $CLUSTERSHELL_CFGDIR/groups.conf
 
-This makes possible for an user to have its own *node groups* configuration.
-If no readable configuration file is found, group support will be disabled but
-other node set operations will still work.
+This makes it possible for a user to have their own *node groups*
+configuration. If no readable configuration file is found, group support will
+be disabled but other node set operations will still work.
 
 *groups.conf* defines configuration sub-directories, but may also define
-source definitions by itself. These **sources** provide external calls that
-are detailed in :ref:`group-external-sources`.
+group sources by itself. These **sources** provide external calls that are
+detailed in :ref:`group-external-sources`.
 
 The following example shows the content of a *groups.conf* file where node
 groups are bound to the source named *genders* by default::
@@ -245,38 +256,55 @@ groups are bound to the source named *genders* by default::
     list: sinfo -h -o "%P"
     reverse: sinfo -h -N -o "%P" -n $NODE
 
-The *groups.conf* files are parsed with Python's `ConfigParser`_:
+The *groups.conf* files are parsed with Python's `ConfigParser`_. The first
+section whose name is *Main* accepts the settings described in the following
+table.
 
-* The first section whose name is *Main* accepts the following keywords:
++---------+------------------------------------------------------------+
+| Key     | Value                                                      |
++=========+============================================================+
+| default | **Name of the default group source.**                      |
+|         |                                                            |
+|         | Used when a group is specified without a source, e.g.      |
+|         | ``@compute`` instead of ``@genders:compute``. Must be the  |
+|         | name of an existing group source.                          |
++---------+------------------------------------------------------------+
+| confdir | **Directories to search for .conf files that define        |
+|         | additional group sources.**                                |
+|         |                                                            |
+|         | Each ``.conf`` file in these directories may define one or |
+|         | more group source sections, as documented below. These     |
+|         | sources are merged with the group sources defined in the   |
+|         | main *groups.conf*. Duplicate group source sections are    |
+|         | not allowed in those files. Configuration files that are   |
+|         | not readable by the current user are ignored (except the   |
+|         | one that defines the default group source). The variable   |
+|         | ``$CFGDIR`` is replaced by the path of the highest         |
+|         | priority configuration directory found (where              |
+|         | *groups.conf* resides). The default *confdir* value        |
+|         | enables both system-wide and any installed user            |
+|         | configuration (thanks to ``$CFGDIR``). Duplicate           |
+|         | directory paths are ignored. The                           |
+|         | key *groupsdir* is accepted as an alias for *confdir*; if  |
+|         | both are defined, *groupsdir* takes precedence.            |
++---------+------------------------------------------------------------+
+| autodir | **Directories to search for YAML group files.**            |
+|         |                                                            |
+|         | These files define node groups directly, without the need  |
+|         | for external commands, and are parsed by the ClusterShell  |
+|         | library itself, making them faster than upcall-based group |
+|         | sources (see :ref:`group-file-based`). A single file may   |
+|         | define multiple group sources. The variable ``$CFGDIR``    |
+|         | is replaced by the path of the highest priority            |
+|         | configuration directory found (where *groups.conf*         |
+|         | resides). The default *autodir* value enables both         |
+|         | system-wide and any installed user configuration (thanks   |
+|         | to ``$CFGDIR``). Duplicate directory paths are ignored.    |
++---------+------------------------------------------------------------+
 
-  * *default* defines a **default node group source** (eg. by referencing a
-    valid section header)
-  * *confdir* defines an optional list of directory paths where the
-    ClusterShell library should look for **.conf** files which define group
-    sources to use.  Each file in these directories with the .conf suffix
-    should contain one or more node group source sections as documented below.
-    These will be merged with the group sources defined in the main
-    *groups.conf* to form the complete set of group sources to use. Duplicate
-    group source sections are not allowed in those files. Configuration files
-    that are not readable by the current user are ignored (except the one that
-    defines the default group source). The variable `$CFGDIR` is replaced by
-    the path of the highest priority configuration directory found (where
-    *groups.conf* resides). The default *confdir* value enables both
-    system-wide and any installed user configuration (thanks to `$CFGDIR`).
-    Duplicate directory paths are ignored.
-  * *autodir* defines an optional list of directories where the ClusterShell
-    library should look for **.yaml** files that define in-file group
-    dictionaries. No need to call external commands for these files, they are
-    parsed by the ClusterShell library itself. Multiple group source
-    definitions in the same file is supported. The variable `$CFGDIR` is
-    replaced by the path of the highest priority configuration directory found
-    (where *groups.conf* resides). The default *confdir* value enables both
-    system-wide and any installed user configuration (thanks to `$CFGDIR`).
-    Duplicate directory paths are ignored.
-
-* Each following section (`genders`, `slurm`) defines a  group source. The
-  map, all, list and reverse upcalls are explained below in
-  :ref:`group-sources-upcalls`.
+Each following section, like `genders` and `slurm` in the example above,
+defines a group source. The **map**, **mapall**, **all**, **list** and
+**reverse** upcalls are explained below in :ref:`group-sources-upcalls`.
 
 .. _group-file-based:
 
@@ -292,7 +320,7 @@ YAML group files
 """"""""""""""""
 
 Cluster node groups can be defined in straightforward YAML files. In such a
-file, each YAML dictionary defines group to nodes mapping. **Different
+file, each YAML dictionary defines a group-to-nodes mapping. **Different
 dictionaries** are handled as **different group sources**.
 
 For compatibility reasons with previous versions of ClusterShell, this is not
@@ -314,7 +342,8 @@ Ensure that *autodir* is set in :ref:`groups_config_conf`::
 
 In the following example, we also changed the default group source
 to **roles** in :ref:`groups_config_conf` (the first dictionary defined in
-the example), so that *@roles:groupname* can just be shorted *@groupname*.
+the example), so that *@roles:groupname* can just be shortened to
+*@groupname*.
 
 .. highlight:: yaml
 
@@ -348,20 +377,35 @@ Here is an example of **/etc/clustershell/groups.d/cluster.yaml**::
 If you wish to define an empty group (with no nodes), you can either use an
 empty string ``''`` or any valid YAML null value (``null`` or ``~``).
 
+.. note::
+
+   To select **every node** of a group source, use the ``*`` wildcard, for
+   example ``@lustre:*`` or, for the default source, ``@*``. This is the
+   *all nodes* notation also used by ``clush -a`` and ``nodeset -a``, as
+   described in :ref:`group-sources-upcalls`. The word ``all`` is not special:
+   it is an ordinary group name, so ``@lustre:*`` and ``@lustre:all`` are
+   **not** equivalent. ``@lustre:all`` resolves the group literally named
+   ``all``, which yields an empty node set here because ``lustre`` defines no
+   such group. By default *all nodes* is the union of every group in the
+   source. Defining an optional ``all`` group, like the ``all:`` key shown
+   above in the ``roles`` source, overrides that union for both ``-a`` and
+   ``@source:*``.
+
 .. highlight:: console
 
 Testing the syntax of your group file can be quickly performed through the
-``-L`` or ``--list-all`` command of :ref:`nodeset-tool`::
+``-L`` or ``--list-all`` command of :ref:`nodeset-tool`, doubled here as
+``-LL`` to also display the nodes of each group::
 
     $ nodeset -LL
     @adm mgmt[1-2]
-    @all login[1-2],mds[1-4],node[0001-0288],oss[0-15],rbh[1-2]
+    @all login[1-2],mds[1-4],node[0001-0288],oss[0-15]
     @compute node[0001-0288]
     @cpu_only node[0009-0288]
     @gpu node[0001-0008]
     @login login[1-2]
-    @storage mds[1-4],oss[0-15],rbh[1-2]
-    @sysgrp sysgrp[1-4]
+    @servers server[001-006,101]
+    @storage mds[1-4],oss[0-15]
     @lustre:mds mds[1-4]
     @lustre:oss oss[0-15]
     @lustre:rbh rbh[1-2]
@@ -377,37 +421,91 @@ Group source upcalls
 """"""""""""""""""""
 
 Each node group source is defined by a section name (*source* name) and up to
-four upcalls:
+five upcalls, described in the following table.
 
-* **map**: External shell command used to resolve a group name into a node
-  set, list of nodes or list of node sets (separated by space characters or by
-  carriage returns). The variable *$GROUP* is replaced before executing the command.
-* **all**: Optional external shell command that should return a node set, list
-  of nodes or list of node sets of all nodes for this group source. If not
-  specified, the library will try to resolve all nodes by using the **list**
-  external command in the same group source followed by **map** for each
-  available group. The notion of *all nodes* is used by ``clush -a`` and also
-  by the special group name ``@*`` (or ``@source:*``).
-* **list**: Optional external shell command that should return the list of all
-  groups for this group source (separated by space characters or by carriage
-  returns). If this upcall is not specified, ClusterShell won't be able to
-  list any available groups (eg. with ``nodeset -l``), so it is highly
-  recommended to set it.
-* **reverse**: Optional external shell command used to find the group(s) of a
-  single node. The variable *$NODE* is previously replaced. If this external
-  call is not specified, the reverse operation is computed in memory by the
-  library from the **list** and **map** external calls, if available. Also, if
-  the number of nodes to reverse is greater than the number of available
-  groups, the reverse external command is avoided automatically to reduce
-  resolution time.
++---------+------------------------------------------------------------+
+| Upcall  | Description                                                |
++=========+============================================================+
+| map     | **Resolves a group name into a node set.**                 |
+|         |                                                            |
+|         | External shell command that should return a node set, list |
+|         | of nodes or list of node sets (separated by space          |
+|         | characters or by carriage returns). The variable *$GROUP*  |
+|         | is replaced before executing the command. Either ``map``   |
+|         | or ``mapall`` must be defined.                             |
++---------+------------------------------------------------------------+
+| mapall  | **Returns all group-to-nodes mappings of the source in a   |
+|         | single call.**                                             |
+|         |                                                            |
+|         | Optional external shell command that should print one      |
+|         | ``group: nodes`` line per group. Useful when the source    |
+|         | can dump all its groups at once (e.g. with ``sinfo`` or    |
+|         | ``ansible-inventory --list``), as a single call then       |
+|         | serves both ``map`` and ``list`` queries from the cache.   |
+|         | ``mapall`` output takes precedence over the ``list``       |
+|         | upcall. If ``map`` is also defined, it is used as a        |
+|         | fallback for groups missing from the ``mapall`` output (or |
+|         | all groups if caching is disabled); otherwise, missing     |
+|         | groups resolve to an empty node set. The first ``:`` on    |
+|         | each line separates the group name from the nodes, so      |
+|         | group names must be single words without ``:``. Duplicate  |
+|         | group lines are merged. A malformed output line makes the  |
+|         | whole ``mapall`` call fail (nothing is cached and the next |
+|         | query retries), and a failing ``mapall`` command does not  |
+|         | fall back to ``map``.                                      |
++---------+------------------------------------------------------------+
+| all     | **Returns all nodes of the group source.**                 |
+|         |                                                            |
+|         | Optional external shell command that should return a node  |
+|         | set, list of nodes or list of node sets. If not specified, |
+|         | the library will try to resolve all nodes by using the     |
+|         | ``list`` external command in the same group source         |
+|         | followed by ``map`` for each available group. The notion   |
+|         | of *all nodes* is used by ``clush -a`` and also by the     |
+|         | special group name ``@*`` (or ``@source:*``).              |
++---------+------------------------------------------------------------+
+| list    | **Returns all group names of the source.**                 |
+|         |                                                            |
+|         | Optional external shell command that should return the     |
+|         | group names (separated by space characters or by carriage  |
+|         | returns). This upcall is not used when ``mapall`` is       |
+|         | defined (unless caching is disabled), as the group list is |
+|         | then derived from its output. If neither ``list`` nor      |
+|         | ``mapall`` is specified, ClusterShell will not be able to  |
+|         | list any available groups (e.g. with ``nodeset -l`` or     |
+|         | ``cluset -l``), so it is highly recommended to set one of  |
+|         | them.                                                      |
++---------+------------------------------------------------------------+
+| reverse | **Finds the groups a single node belongs to.**             |
+|         |                                                            |
+|         | Optional external shell command. The variable *$NODE* is   |
+|         | replaced before executing the command. If this external    |
+|         | call is not specified, the reverse operation is computed   |
+|         | in memory by the library from the ``list`` and ``map``     |
+|         | external calls, if available. Also, if the number of nodes |
+|         | to reverse is greater than the number of available groups, |
+|         | the reverse external command is avoided automatically to   |
+|         | reduce resolution time.                                    |
++---------+------------------------------------------------------------+
 
-In addition to context-dependent *$GROUP* and *$NODE* variables described
-above, the two following variables are always available and also replaced
-before executing shell commands:
+.. highlight:: ini
 
-* *$CFGDIR* is replaced by *groups.conf* base directory path
-* *$SOURCE* is replaced by current source name (see an usage example just
+Example of a Slurm partition group source defined with a single **mapall**
+upcall, instead of separate **map** and **list** upcalls::
+
+    [slurmpart,sp]
+    mapall: sinfo -h -o "%R:%N"
+
+In addition to the context-dependent *$GROUP* and *$NODE* variables
+described above, the following two variables are always available and also
+replaced before executing shell commands:
+
+* *$CFGDIR* is replaced by the *groups.conf* base directory path
+* *$SOURCE* is replaced by the current source name (see a usage example just
   below)
+
+Upcall commands are executed with their standard input connected to
+``/dev/null``, so they must not expect any input on stdin.
 
 .. _group-external-caching:
 
@@ -433,7 +531,7 @@ Multiple sources section
 
 Use a comma-separated list of source names in the section header if you want
 to define multiple group sources with similar upcall commands. The special
-variable `$SOURCE` is always replaced by the source name before command
+variable ``$SOURCE`` is always replaced by the source name before command
 execution (here `cluster`, `racks` and `cpu`), for example::
 
     [cluster,racks,cpu]
@@ -462,9 +560,9 @@ Return code of external calls
 """""""""""""""""""""""""""""
 
 Each external command might return a non-zero return code when the operation
-is not doable. But if the call return zero, for instance, for a non-existing
-group, the user will not receive any error when trying to resolve such unknown
-group. The desired behavior is up to the system administrator.
+is not doable. But if the call returns zero, for instance for a non-existing
+group, the user will not receive any error when trying to resolve such an
+unknown group. The desired behavior is up to the system administrator.
 
 .. _group-slurm-bindings:
 
@@ -473,12 +571,12 @@ Slurm group bindings
 
 Enable Slurm node group bindings by renaming the example configuration file
 usually installed as ``/etc/clustershell/groups.conf.d/slurm.conf.example`` to
-``slurm.conf``. Three group sources are defined in this file and are detailed
-below. Each section comes with a long and short names (for convenience), but
-actually defines a same group source.
+``slurm.conf``. Seven group sources are defined in this file and are detailed
+below. Each section comes with a long and a short name (for convenience), but
+both define the same group source.
 
 While examples below are based on the :ref:`nodeset-tool` tool, all Python
-tools using ClusterShell and the :class:`.NodeSet`  class will automatically
+tools using ClusterShell and the :class:`.NodeSet` class will automatically
 benefit from these additional node groups.
 
 .. highlight:: ini
@@ -489,6 +587,7 @@ partition's nodes::
 
     [slurmpart,sp]
     map: sinfo -h -o "%N" -p $GROUP
+    mapall: sinfo -h -o "%R:%N"
     all: sinfo -h -o "%N"
     list: sinfo -h -o "%R"
     reverse: sinfo -h -N -o "%R" -n $NODE
@@ -510,6 +609,7 @@ the nodes currently in that reservation::
 
     [slurmresv,sr]
     map: scontrol -o show reservation $GROUP | grep -Po 'Nodes=\K[^ ]+'
+    mapall: scontrol -o show reservation | sed -n 's/^ReservationName=\([^ :]*\) .* Nodes=\([^ ]*\).*/\1:\2/p'
     all: scontrol -o show reservation | grep -Po 'Nodes=\K[^ ]+'
     list: scontrol -o show reservation | grep -Po 'ReservationName=\K[^ ]+'
     cache_time: 60
@@ -531,6 +631,7 @@ nodes currently in that state::
 
     [slurmstate,st]
     map: sinfo -h -o "%N" -t $GROUP
+    mapall: sinfo -h -o "%T:%N" | sed 's/[*~#!%$@+^-]*:/:/'
     all: sinfo -h -o "%N"
     list: sinfo -h -o "%T" | tr -d '*~#$@+'
     reverse: sinfo -h -N -o "%T" -n $NODE | tr -d '*~#$@+'
@@ -557,6 +658,7 @@ allocated for this job::
 
     [slurmjob,sj]
     map: squeue -h -j $GROUP -o "%N"
+    mapall: squeue -h -o "%i:%N" -t R
     list: squeue -h -o "%i" -t R
     reverse: squeue -h -w $NODE -o "%i"
     cache_time: 60
@@ -567,6 +669,7 @@ allocated for jobs belonging to the username::
 
     [slurmuser,su]
     map: squeue -h -u $GROUP -o "%N" -t R
+    mapall: squeue -h -o "%u:%N" -t R
     list: squeue -h -o "%u" -t R
     reverse: squeue -h -w $NODE -o "%i"
     cache_time: 60
@@ -587,11 +690,12 @@ processes, not one-shot commands).
 .. highlight:: ini
 
 The next section **slurmaccount,sa** defines a group source based on Slurm
-accounts. Each group is based on a account and contains the nodes where there
+accounts. Each group is based on an account and contains the nodes where there
 are running jobs under this account::
 
     [slurmaccount,sa]
     map: squeue -h -A $GROUP -o "%N" -t R
+    mapall: squeue -h -o "%a:%N" -t R
     list: squeue -h -o "%a" -t R
     reverse: squeue -h -w $NODE -o "%a" 2>/dev/null || true
     cache_time: 60
@@ -611,6 +715,7 @@ jobs under this qos::
 
     [slurmqos,sq]
     map: squeue -h -q $GROUP -o "%N" -t R
+    mapall: squeue -h -o "%q:%N" -t R
     list: squeue -h -o "%q" -t R
     reverse: squeue -h -w $NODE -o "%q" 2>/dev/null || true
     cache_time: 60
@@ -638,7 +743,7 @@ below.
    In that case, simply use :ref:`cluset <cluset-tool>` instead.
 
 While examples below are based on the :ref:`cluset-tool` tool, all Python
-tools using ClusterShell and the :class:`.NodeSet`  class will automatically
+tools using ClusterShell and the :class:`.NodeSet` class will automatically
 benefit from these additional node groups.
 
 .. highlight:: ini
@@ -669,6 +774,88 @@ Example of use with :ref:`cluset-tool`::
 
 .. highlight:: text
 
+.. _group-ansible-bindings:
+
+Ansible inventory group bindings
+"""""""""""""""""""""""""""""""""
+
+Enable Ansible inventory group bindings by renaming the example configuration
+file usually installed as
+``/etc/clustershell/groups.conf.d/ansible.conf.example`` to ``ansible.conf``.
+
+**Requirements**: ``ansible-core`` (provides the ``ansible-inventory`` command)
+and ``jq``.
+
+The section **ansible** defines a group source backed by Ansible inventory.
+Each upcall command uses ``ANSIBLE_INVENTORY`` as an inline environment variable
+prefix so that multiple inventory sources (comma-separated paths) are supported.
+The default path defined in the configuration file is used as a fallback when
+``$ANSIBLE_INVENTORY`` is not set in the environment::
+
+    ANSIBLE_INVENTORY="${ANSIBLE_INVENTORY:-/path/to/inventory}" ansible-inventory --list ...
+
+The example upcalls resolve hosts to their Ansible ``inventory_hostname`` rather
+than the ``ansible_host`` connection address, so names from non-resolvable
+aliases (e.g. with dynamic inventory) are not directly usable with
+:ref:`clush-tool`. These commands can be adapted to your inventory as needed,
+for instance to emit ``ansible_host`` instead.
+
+Another common adaptation is to strip a DNS domain suffix when the inventory
+contains fully qualified hostnames but short names resolve on the cluster.
+Append ``| sub("\\.example\\.com$"; "")`` to the ``map`` and ``all`` filters,
+and in ``mapall``, apply it to each hostname by changing ``[r($d;.)]`` to
+``[r($d;.) | sub("\\.example\\.com$"; "")]``.
+
+The ``mapall`` upcall resolves every group in a single ``ansible-inventory
+--list`` call. As ``--list`` always dumps the whole inventory regardless of the
+group being queried, this avoids running one ``ansible-inventory`` command per
+group when listing or resolving several groups at once (e.g. ``nodeset -ll``).
+Group names that contain ``:`` or whitespace cannot be expressed in the
+``mapall`` output format; they are skipped from ``mapall`` and resolved through
+the ``map`` upcall instead, so they still resolve but do not appear in
+``nodeset -l`` output.
+
+.. highlight:: console
+
+Example of use with :ref:`nodeset-tool` on a cluster managed with Ansible::
+
+    $ nodeset -s ansible -l
+    @ansible:db
+    @ansible:web
+    @ansible:web_prod
+    @ansible:web_test
+    $ clush -w @ansible:web uptime
+
+.. highlight:: text
+
+.. _topology-config:
+
+Tree topology
+-------------
+
+The optional *topology.conf* file defines the propagation routes used by
+ClusterShell's :ref:`tree execution mode <clush-tree>` to reach target nodes
+through gateway nodes. It is loaded from the same configuration directories as
+the other ClusterShell configuration files, the system-wide default being::
+
+    /etc/clustershell/topology.conf
+
+.. highlight:: ini
+
+Routes are declared under a ``[routes]`` section, for example::
+
+    [routes]
+    rio0: rio[10-13]
+    rio[10-11]: rio[100-240]
+    rio[12-13]: rio[300-440]
+
+.. highlight:: text
+
+An example file is provided with ClusterShell as *topology.conf.example*. See
+:ref:`clush-tree` for a full description of tree mode, including how routes are
+turned into a propagation tree and the related command line options (such as
+``--topology``).
+
 .. _defaults-config:
 
 Library Defaults
@@ -695,22 +882,121 @@ one of the following files is found, in priority order::
     $HOME/.local/etc/clustershell/defaults.conf
 
 In addition, if the environment variable ``$CLUSTERSHELL_CFGDIR`` is defined and
-valid, it will used instead. In such case, the following configuration file
+valid, it will be used instead. In that case, the following configuration file
 will be tried first for ClusterShell defaults::
 
     $CLUSTERSHELL_CFGDIR/defaults.conf
 
+Settings
+^^^^^^^^
+
+Library defaults are organized in sections, each of them covering a
+particular ClusterShell subsystem. The following tables describe the
+available settings, grouped by section.
+
+The ``[task.default]`` section defines Task worker defaults.
+
++--------------------+----------------------------------------------------+
+| Key                | Value                                              |
++====================+====================================================+
+| stderr             | Whether to store stderr separately from stdout     |
+|                    | (default: no).                                     |
++--------------------+----------------------------------------------------+
+| stdin              | Whether to keep the command's standard input open  |
+|                    | for writing (e.g. via ``Worker.write()``); if      |
+|                    | disabled, EOF is sent at startup so commands that  |
+|                    | read from stdin do not block (default: yes).       |
++--------------------+----------------------------------------------------+
+| stdout_msgtree     | Whether to gather stdout in a message tree, as     |
+|                    | required to display gathered output, e.g. with     |
+|                    | ``clush -b`` (default: yes).                       |
++--------------------+----------------------------------------------------+
+| stderr_msgtree     | Whether to gather stderr in a message tree         |
+|                    | (default: yes).                                    |
++--------------------+----------------------------------------------------+
+| engine             | Event engine backend: *auto*, *epoll*, *poll* or   |
+|                    | *select* (default: *auto*). With *auto*, the best  |
+|                    | available backend is selected: *epoll* first, then |
+|                    | *poll*, then *select*. Overriding the default is   |
+|                    | rarely needed and mostly useful for debugging.     |
++--------------------+----------------------------------------------------+
+| port_qlimit        | Accepted here only for 1.8 compatibility; a        |
+|                    | non-default value in the ``[engine]`` section      |
+|                    | takes precedence.                                  |
++--------------------+----------------------------------------------------+
+| auto_tree          | Whether to automatically enable                    |
+|                    | :ref:`tree mode <clush-tree>` when a               |
+|                    | *topology.conf* file is found (default: yes).      |
++--------------------+----------------------------------------------------+
+| local_workername   | Name of the worker module used for local           |
+|                    | execution (default: *exec*).                       |
++--------------------+----------------------------------------------------+
+| distant_workername | Name of the worker module used for remote          |
+|                    | execution (default: *ssh*; see the *rsh* use       |
+|                    | case below).                                       |
++--------------------+----------------------------------------------------+
+
+The ``[task.info]`` section defines Task runtime defaults.
+
++--------------------+----------------------------------------------------+
+| Key                | Value                                              |
++====================+====================================================+
+| debug              | Whether to enable library debugging output         |
+|                    | (default: no).                                     |
++--------------------+----------------------------------------------------+
+| fanout             | Size of the sliding window of connectors (e.g. max |
+|                    | number of *ssh(1)* processes allowed to run at the |
+|                    | same time) (default: 64).                          |
++--------------------+----------------------------------------------------+
+| grooming_delay     | Delay in seconds during which gateways aggregate   |
+|                    | identical output lines and return codes before     |
+|                    | sending them back in batch (tree mode)             |
+|                    | (default: 0.25).                                   |
++--------------------+----------------------------------------------------+
+| connect_timeout    | Timeout in seconds to allow a connection to        |
+|                    | establish; if set to 0, no timeout occurs          |
+|                    | (default: 10).                                     |
++--------------------+----------------------------------------------------+
+| command_timeout    | Timeout in seconds to allow a command to           |
+|                    | complete; if set to 0, no timeout occurs           |
+|                    | (default: 0).                                      |
++--------------------+----------------------------------------------------+
+
+The ``[engine]`` section defines event engine defaults.
+
++--------------------+----------------------------------------------------+
+| Key                | Value                                              |
++====================+====================================================+
+| port_qlimit        | Maximum number of messages that can be queued on   |
+|                    | an engine port, used for inter-thread task         |
+|                    | messaging (default: 100). This is the preferred    |
+|                    | section for this key; a non-default value here     |
+|                    | takes precedence over ``[task.default]`` (kept     |
+|                    | for 1.8 compatibility).                            |
++--------------------+----------------------------------------------------+
+
+The ``[nodeset]`` section defines NodeSet defaults.
+
++--------------------+----------------------------------------------------+
+| Key                | Value                                              |
++====================+====================================================+
+| fold_axis          | Axis or axes along which nD node sets are folded   |
+|                    | for display; empty by default, meaning that        |
+|                    | folding is computed on all axes (see               |
+|                    | :ref:`defaults-config-slurm`).                     |
++--------------------+----------------------------------------------------+
+
 Use case: rsh
 ^^^^^^^^^^^^^^
 
-If your cluster uses a rsh variant like ``mrsh`` or ``krsh``, you may want to
+If your cluster uses an rsh variant like ``mrsh`` or ``krsh``, you may want to
 change it in the library defaults.
 
 An example file is usually available in
 ``/usr/share/doc/clustershell-*/examples/defaults.conf-rsh`` and could be
 copied to ``/etc/clustershell/defaults.conf`` or to an alternate path
 described above. Basically, the change consists in defining an alternate
-distant worker by Python module name as follow::
+distant worker by Python module name as follows::
 
     [task.default]
     distant_workername: Rsh
@@ -735,6 +1021,11 @@ folding is only computed on the last axis (seems to work best with Slurm)::
 That way, node sets computed by ClusterShell tools can be passed to Slurm
 without error.
 
-.. _ConfigParser: http://docs.python.org/library/configparser.html
+Since this only affects how node sets are folded for display, you may also fold
+along a single axis per invocation with the ``--axis`` option of
+:ref:`nodeset <nodeset-tool>`, :ref:`cluset <cluset-tool>` and
+:ref:`clush <clush-axis>`, instead of setting ``fold_axis`` here.
+
+.. _ConfigParser: https://docs.python.org/3/library/configparser.html
 .. _nodeset: https://xcat-docs.readthedocs.io/en/stable/guides/admin-guides/references/man8/nodeset.8.html
 .. _sys.prefix: https://docs.python.org/3/library/sys.html#sys.prefix

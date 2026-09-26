@@ -28,7 +28,7 @@ from ClusterShell.Task import Task, task_cleanup
 from ClusterShell.Topology import TopologyGraph
 from ClusterShell.Worker.Tree import TreeWorker, WorkerTree
 
-from TLib import HOSTNAME, make_temp_dir, make_temp_file, make_temp_filename
+from .TLib import HOSTNAME, make_temp_dir, make_temp_file, make_temp_filename
 
 
 NODE_HEAD = HOSTNAME
@@ -54,6 +54,7 @@ class TEventHandlerBase(EventHandler):
         self.ev_close_cnt = 0
         self.ev_timedout_cnt = 0
         self.last_read = None
+        self.read_snames = set()
 
 
 class TEventHandlerLegacy(TEventHandlerBase):
@@ -95,6 +96,7 @@ class TEventHandler(TEventHandlerBase):
     def ev_read(self, worker, node, sname, msg):
         self.ev_read_cnt += 1
         self.last_read = msg
+        self.read_snames.add(sname)
 
     def ev_written(self, worker, node, sname, size):
         self.ev_written_cnt += 1
@@ -114,6 +116,11 @@ class TRoutingEventHandler(TEventHandler):
     def __init__(self):
         TEventHandler.__init__(self)
         self.routing_events = []
+        self.pickup_nodes = []
+
+    def ev_pickup(self, worker, node):
+        TEventHandler.ev_pickup(self, worker, node)
+        self.pickup_nodes.append(str(node))
 
     def _ev_routing(self, worker, arg):
         self.routing_events.append((worker, arg))
@@ -170,6 +177,11 @@ class TreeWorkerTestBase(unittest.TestCase):
         teh = TEventHandler()
         srcf = make_temp_file(b'Lorem Ipsum', 'test_tree_copy_file_src')
         dest = make_temp_filename('test_tree_copy_file_dest')
+        # unlink pre-created dest: test targets are IP aliases of the same
+        # host, so concurrent untars of the same dest path occasionally
+        # failed with "tar: Cannot open: File exists"; only safe with up to
+        # 2 targets, as 3+ concurrent tars could still race after unlink
+        os.unlink(dest)
         try:
             worker = self.task.copy(srcf.name, dest, nodes=target, handler=teh)
             self.task.run()
@@ -184,7 +196,34 @@ class TreeWorkerTestBase(unittest.TestCase):
             with open(dest, 'r') as destf:
                 self.assertEqual(destf.read(), 'Lorem Ipsum')
         finally:
-            os.remove(dest)
+            if os.path.exists(dest):
+                os.remove(dest)
+
+    def _tree_copy_file_error(self, target):
+        """helper to copy file to a bad dest (untar/scp error -> stderr)"""
+        teh = TEventHandler()
+        srcf = make_temp_file(b'Lorem Ipsum', 'test_tree_copy_file_src')
+        # parent dir is removed so the remote scp/untar fails on every target
+        destdir = make_temp_dir()
+        dest = join(destdir.name, 'destfile')
+        destdir.cleanup()
+        try:
+            worker = self.task.copy(srcf.name, dest, nodes=target, handler=teh)
+            self.task.run()
+            target_cnt = len(NodeSet(target))
+            self.assertEqual(teh.ev_start_cnt, 1)
+            self.assertEqual(teh.ev_pickup_cnt, target_cnt)
+            self.assertEqual(teh.ev_hup_cnt, target_cnt)
+            self.assertEqual(teh.ev_timedout_cnt, 0)
+            self.assertEqual(teh.ev_close_cnt, 1)
+            # the copy failed: error output must be attributed to stderr only,
+            # not merged into stdout (GH #622)
+            self.assertTrue(teh.ev_read_cnt > 0)
+            self.assertEqual(teh.read_snames, set([worker.SNAME_STDERR]))
+        finally:
+            srcf.close()
+            if os.path.exists(dest):
+                os.remove(dest)
 
     def _tree_copy_dir(self, target):
         """helper to copy directory"""
@@ -291,6 +330,37 @@ class TreeWorkerTestBase(unittest.TestCase):
         finally:
             file1.close()
             file2.close()
+            srcdir.cleanup()
+            destdir.cleanup()
+
+    def _tree_rcopy_dir_error(self, target):
+        """helper to rcopy directory to a bad dest (extract error -> stderr)"""
+        teh = TEventHandler()
+        srcdir = make_temp_dir()
+        srcfile = make_temp_file(b'Lorem Ipsum', suffix=".txt", dir=srcdir.name)
+        destdir = make_temp_dir()
+        # conflicting regular files at extract paths so untar always fails
+        for tgt in NodeSet(target):
+            conflict = join(destdir.name, basename(srcdir.name) + '.' + tgt)
+            with open(conflict, 'wb') as cfile:
+                cfile.write(b'conflict')
+        try:
+            worker = self.task.rcopy(srcdir.name, destdir.name, nodes=target,
+                                     handler=teh)
+            self.task.run()
+            target_cnt = len(NodeSet(target))
+            self.assertEqual(teh.ev_start_cnt, 1)
+            self.assertEqual(teh.ev_pickup_cnt, target_cnt)
+            self.assertEqual(teh.ev_hup_cnt, target_cnt)
+            self.assertEqual(teh.ev_timedout_cnt, 0)
+            self.assertEqual(teh.ev_close_cnt, 1)
+            # the rcopy failed: extract error must be reported as stderr
+            self.assertTrue(teh.ev_read_cnt > 0)
+            self.assertEqual(teh.read_snames, set([worker.SNAME_STDERR]))
+            # as bytes, like any other message (not the exception object)
+            self.assertTrue(isinstance(teh.last_read, bytes))
+        finally:
+            srcfile.close()
             srcdir.cleanup()
             destdir.cleanup()
 
@@ -524,6 +594,18 @@ class TreeWorkerTest(TreeWorkerTestBase):
         """test tree copy: file, gateway is target"""
         self._tree_copy_file(NODE_GATEWAY)
 
+    def test_tree_copy_file_error_direct(self):
+        """test tree copy: bad dest, direct target -> stderr (#622)"""
+        self._tree_copy_file_error(NODE_DIRECT)
+
+    def test_tree_copy_file_error_distant(self):
+        """test tree copy: bad dest, distant target via gateway -> stderr (#622)"""
+        self._tree_copy_file_error(NODE_DISTANT)
+
+    def test_tree_copy_file_error_distant2(self):
+        """test tree copy: bad dest, distant 2 targets via gateway -> stderr (#622)"""
+        self._tree_copy_file_error(NODE_DISTANT2)
+
     def test_tree_copy_dir_distant(self):
         """test tree copy: directory, distant target"""
         self._tree_copy_dir(NODE_DISTANT)
@@ -584,6 +666,45 @@ class TreeWorkerTest(TreeWorkerTestBase):
         """test tree rcopy: file, direct target, not in topology"""
         self._tree_rcopy_file(NODE_FOREIGN)
 
+    def test_tree_rcopy_dir_error_direct(self):
+        """test tree rcopy: bad dest, direct target -> stderr"""
+        self._tree_rcopy_dir_error(NODE_DIRECT)
+
+    def test_tree_rcopy_dir_error_distant(self):
+        """test tree rcopy: bad dest, distant target via gateway -> stderr"""
+        self._tree_rcopy_dir_error(NODE_DISTANT)
+
+    def test_tree_rcopy_dir_error_distant2(self):
+        """test tree rcopy: bad dest, distant 2 targets via gateway -> stderr"""
+        self._tree_rcopy_dir_error(NODE_DISTANT2)
+
+    def test_tree_rcopy_no_tarfile_warning(self):
+        """test tree rcopy: no tarfile warning leaks (PEP 706, <3.14 compat)"""
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter('always')
+            self._tree_rcopy_file(NODE_DISTANT)
+        self.assertEqual([x for x in w if 'tarfile' in x.filename], [])
+
+    def test_tree_rcopy_preserves_mode(self):
+        """test tree rcopy: preserves file mode bits (PEP 706 regression)"""
+        teh = TEventHandler()
+        srcdir = make_temp_dir()
+        destdir = make_temp_dir()
+        srcfile = make_temp_file(b'mode-check', suffix=".txt", dir=srcdir.name)
+        try:
+            os.chmod(srcfile.name, 0o664)
+            src_mode = os.stat(srcfile.name).st_mode & 0o777
+            self.task.rcopy(srcfile.name, destdir.name, nodes=NODE_DISTANT,
+                            handler=teh)
+            self.task.run()
+            for tgt in NodeSet(NODE_DISTANT):
+                dst = join(destdir.name, basename(srcfile.name) + '.' + tgt)
+                self.assertEqual(os.stat(dst).st_mode & 0o777, src_mode)
+        finally:
+            srcfile.close()
+            srcdir.cleanup()
+            destdir.cleanup()
+
     def test_tree_worker_missing_arguments(self):
         """test TreeWorker with missing arguments"""
         teh = TEventHandler()
@@ -614,10 +735,38 @@ class TreeWorkerTest(TreeWorkerTestBase):
         teh = TEventAbortOnStartHandler(self)
         self.task.run('echo Lorem Ipsum', nodes=NODE_DISTANT, handler=teh)
         self.assertEqual(teh.ev_start_cnt, 1)
-        #self.assertEqual(teh.ev_pickup_cnt, 0) # XXX to be improved
+        self.assertEqual(teh.ev_pickup_cnt, 0) # #594: aborted on start
         self.assertEqual(teh.ev_read_cnt, 0)
         self.assertEqual(teh.ev_written_cnt, 0)
         self.assertEqual(teh.ev_hup_cnt, 1)
+        self.assertEqual(teh.ev_timedout_cnt, 0)
+        self.assertEqual(teh.ev_close_cnt, 1)
+        self.assertEqual(teh.last_read, None)
+
+    def test_tree_run_abort_on_start_multi(self):
+        """test tree run abort on ev_start, multiple nodes"""
+        # #594: exercises clearance of buffered pickups for >1 node
+        class TEventAbortOnStartHandler(TEventHandler):
+            def __init__(self, testcase):
+                TEventHandler.__init__(self)
+                self.testcase = testcase
+
+            def ev_start(self, worker):
+                TEventHandler.ev_start(self, worker)
+                worker.abort()
+
+            def ev_hup(self, worker, node, rc):
+                TEventHandler.ev_hup(self, worker, node, rc)
+                self.testcase.assertEqual(rc, os.EX_PROTOCOL)
+
+        teh = TEventAbortOnStartHandler(self)
+        self.task.run('echo Lorem Ipsum', nodes=NODE_DISTANT2, handler=teh)
+        target_cnt = len(NodeSet(NODE_DISTANT2))
+        self.assertEqual(teh.ev_start_cnt, 1)
+        self.assertEqual(teh.ev_pickup_cnt, 0)
+        self.assertEqual(teh.ev_read_cnt, 0)
+        self.assertEqual(teh.ev_written_cnt, 0)
+        self.assertEqual(teh.ev_hup_cnt, target_cnt)
         self.assertEqual(teh.ev_timedout_cnt, 0)
         self.assertEqual(teh.ev_close_cnt, 1)
         self.assertEqual(teh.last_read, None)
@@ -831,6 +980,37 @@ class TreeWorkerGW2Test(TreeWorkerTestBase):
         self.assertEqual(teh.ev_timedout_cnt, 2)  # command timed out
         self.assertEqual(teh.ev_close_cnt, 2)
 
+    def test_tree_run_gw2_abort_on_pickup_mid_flush(self):
+        """test tree run abort on ev_pickup during _check_ini flush (#594)"""
+        class TEventAbortOnPickupHandler(TEventHandler):
+            """Test Event Abort On Pickup Handler"""
+
+            def __init__(self, testcase):
+                TEventHandler.__init__(self)
+                self.testcase = testcase
+
+            def ev_pickup(self, worker, node):
+                TEventHandler.ev_pickup(self, worker, node)
+                worker.abort()
+
+            def ev_hup(self, worker, node, rc):
+                TEventHandler.ev_hup(self, worker, node, rc)
+                self.testcase.assertEqual(rc, os.EX_PROTOCOL)
+
+        teh = TEventAbortOnPickupHandler(self)
+        self.task.run('echo Lorem Ipsum', nodes=NODE_DISTANT2, handler=teh)
+        target_cnt = len(NodeSet(NODE_DISTANT2))
+        self.assertEqual(teh.ev_start_cnt, 1)
+        # First pickup fires and aborts; the inner break in _check_ini
+        # stops the second buffered pickup from firing.
+        self.assertEqual(teh.ev_pickup_cnt, 1)
+        self.assertEqual(teh.ev_read_cnt, 0)
+        self.assertEqual(teh.ev_written_cnt, 0)
+        self.assertEqual(teh.ev_hup_cnt, target_cnt)
+        self.assertEqual(teh.ev_timedout_cnt, 0)
+        self.assertEqual(teh.ev_close_cnt, 1)
+        self.assertEqual(teh.last_read, None)
+
     def test_tree_run_gw2_write_distant(self):
         """test tree run with write(), 2 gateways, distant target"""
         self._tree_run_write(NODE_DISTANT)
@@ -929,6 +1109,14 @@ class TreeWorkerGW2F1FTest(TreeWorkerTestBase):
         # event handler checks
         self.assertEqual(teh.ev_start_cnt, 1)
         self.assertEqual(teh.ev_pickup_cnt, 2)
+        # #594: each node fires ev_pickup EXACTLY ONCE even after reroute.
+        # This holds structurally: PropagationChannel._send_ctl runs at
+        # most once per actual channel.send, and a CTL queued behind a
+        # never-acked CFG message is GC'd before any send -- so a
+        # rerouted target's first _emit_pickup is the only one. The list
+        # comparison (not a set) below catches accidental double-fires.
+        self.assertEqual(sorted(teh.pickup_nodes),
+                         sorted(str(n) for n in NodeSet(NODE_DISTANT2)))
         # read_cnt += 1 for gateway error on stderr (so currently not fully
         # transparent to the user)
         self.assertEqual(teh.ev_read_cnt, 3)
@@ -937,3 +1125,76 @@ class TreeWorkerGW2F1FTest(TreeWorkerTestBase):
         self.assertEqual(teh.ev_timedout_cnt, 0)
         self.assertEqual(teh.ev_close_cnt, 1)
         self.assertEqual(teh.last_read, b'Lorem Ipsum')
+
+    def test_tree_run_gw2f1_no_double_pickup_under_reroute(self):
+        """test #594 invariant: rerouted target fires ev_pickup at most once
+
+        Companion to test_tree_run_gw2f1_reroute focused solely on the
+        no-double-fire invariant. With pickup emission centralized in
+        PropagationChannel._send_ctl (runs once per actual channel.send)
+        and Worker._on_start (fires once per child node-key), the same
+        node cannot see ev_pickup twice -- even when its initial gateway
+        fails before CFG-ACK and the target is rerouted to a working
+        gateway. If a future refactor reintroduces eager pickup emission
+        from any pre-send site, this test fails immediately.
+        """
+        teh = TRoutingEventHandler()
+        self.task.run('echo Lorem Ipsum', nodes=NODE_DISTANT2, handler=teh)
+
+        # Exactly one reroute happened (the failed gateway).
+        self.assertEqual(len(teh.routing_events), 1)
+
+        # pickup_nodes is a list (one entry per ev_pickup CALL, not a
+        # deduped set). It must have no duplicates.
+        self.assertEqual(len(teh.pickup_nodes), len(set(teh.pickup_nodes)),
+                         "ev_pickup fired more than once for some node: %s"
+                         % teh.pickup_nodes)
+        self.assertEqual(set(teh.pickup_nodes),
+                         set(str(n) for n in NodeSet(NODE_DISTANT2)))
+
+    def test_tree_run_gw2f1_pickup_after_reroute(self):
+        """test ev_pickup for a rerouted target fires after _ev_routing (#594)"""
+        class TOrderedRoutingEventHandler(TRoutingEventHandler):
+            """Record the absolute order of pickup and routing events."""
+
+            def __init__(self):
+                TRoutingEventHandler.__init__(self)
+                self.event_order = []  # ('pickup', node) | ('routing', arg)
+
+            def ev_pickup(self, worker, node):
+                TRoutingEventHandler.ev_pickup(self, worker, node)
+                self.event_order.append(('pickup', str(node)))
+
+            def _ev_routing(self, worker, arg):
+                TRoutingEventHandler._ev_routing(self, worker, arg)
+                self.event_order.append(('routing', arg))
+
+        teh = TOrderedRoutingEventHandler()
+        self.task.run('echo Lorem Ipsum', nodes=NODE_DISTANT2, handler=teh)
+
+        # one reroute event for the down gateway
+        self.assertEqual(len(teh.routing_events), 1)
+        _, routing_arg = teh.routing_events[0]
+        rerouted = NodeSet(routing_arg['targets'])
+
+        # locate the routing event in the absolute event timeline
+        routing_idx = next(i for i, (name, _) in enumerate(teh.event_order)
+                           if name == 'routing')
+
+        # every rerouted target's ev_pickup must come AFTER the routing event:
+        # _emit_pickup now fires from PropagationChannel only when the CTL
+        # actually leaves the local process, so a target whose initial
+        # gateway is unreachable cannot be 'picked up' until the reroute
+        # places its send on a working channel.
+        for target in rerouted:
+            tgt = str(target)
+            pickup_idx = next((i for i, (name, payload)
+                              in enumerate(teh.event_order)
+                              if name == 'pickup' and payload == tgt), None)
+            self.assertIsNotNone(
+                pickup_idx,
+                "missing ev_pickup for rerouted target %s" % tgt)
+            self.assertGreater(
+                pickup_idx, routing_idx,
+                "ev_pickup for rerouted target %s fired before _ev_routing"
+                % tgt)

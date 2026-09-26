@@ -2,6 +2,7 @@
 Unit test library
 """
 
+import logging
 import os
 import socket
 import sys
@@ -18,12 +19,21 @@ except ImportError:
 from io import BytesIO, StringIO
 
 
-__all__ = ['HOSTNAME', 'load_cfg', 'make_temp_filename', 'make_temp_file',
-           'make_temp_dir', 'CLI_main']
+__all__ = ['HOSTNAME', 'which', 'load_cfg', 'make_temp_filename',
+           'make_temp_file', 'make_temp_dir', 'CLI_main']
 
 # Get machine short hostname; allow override for CI/environments where the
 # short hostname is not resolvable via SSH (e.g. macOS random hostnames).
 HOSTNAME = os.environ.get('CSTEST_HOSTNAME') or socket.gethostname().split('.', 1)[0]
+
+# Replace with shutil.which() once we only support Py3.3+
+def which(program):
+    """Return path of first executable program found in PATH, or None."""
+    for path in os.environ.get('PATH', '').split(os.pathsep):
+        fpath = os.path.join(path, program)
+        if os.path.isfile(fpath) and os.access(fpath, os.X_OK):
+            return fpath
+    return None
 
 class TBytesIO(BytesIO):
     """Standard stream of in memory bytes for testing purpose."""
@@ -87,6 +97,9 @@ def CLI_main(test, main, args, stdin, expected_stdout, expected_rc=0,
     saved_stdin = sys.stdin
     saved_stdout = sys.stdout
     saved_stderr = sys.stderr
+    # a CLI -d run calls logging.basicConfig(); snapshot root logging to restore it
+    saved_log_handlers = logging.root.handlers[:]
+    saved_log_level = logging.root.level
 
     # Capture standard streams
 
@@ -115,6 +128,12 @@ def CLI_main(test, main, args, stdin, expected_stdout, expected_rc=0,
     finally:
         sys.stdout = saved_stdout
         sys.stderr = saved_stderr
+        # undo logging config a CLI -d run leaked (handler bound to closed stderr)
+        for handler in logging.root.handlers:
+            if handler not in saved_log_handlers:
+                handler.close()
+        logging.root.handlers[:] = saved_log_handlers
+        logging.root.setLevel(saved_log_level)
         # close temporary file if we used one for stdin
         if saved_stdin != sys.stdin:
             sys.stdin.close()

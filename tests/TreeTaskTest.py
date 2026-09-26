@@ -11,9 +11,9 @@ from ClusterShell.Propagation import RouteResolvingError
 from ClusterShell.Task import task_self
 from ClusterShell.Topology import TopologyError
 
-from TLib import HOSTNAME, make_temp_file
+from .TLib import HOSTNAME, make_temp_file
 
-# live logging with nosetests --nologcapture
+# enable live DEBUG logging when running the tests
 logging.basicConfig(level=logging.DEBUG)
 
 
@@ -28,7 +28,7 @@ class TreeTaskTest(unittest.TestCase):
         """test task shell auto tree"""
         # initialize a dummy topology.conf file
         topofile = make_temp_file(dedent("""
-                        [Main]
+                        [routes]
                         %s: dummy-gw
                         dummy-gw: dummy-node"""% HOSTNAME).encode())
         task = task_self()
@@ -53,7 +53,7 @@ class TreeTaskTest(unittest.TestCase):
         """test task shell auto tree [TopologyError]"""
         # initialize an erroneous topology.conf file
         topofile = make_temp_file(dedent("""
-                        [Main]
+                        [routes]
                         %s: dummy-gw
                         dummy-gw: dummy-gw"""% HOSTNAME).encode())
         task = task_self()

@@ -8,7 +8,7 @@ clubak
 Overview
 ^^^^^^^^
 
-*clubak* is another utility provided with the ClusterShell library that try to
+*clubak* is another utility provided with the ClusterShell library that tries to
 gather and sort such dsh-like output::
 
     node17: MD5 (cstest.py) = 62e23bcf2e11143d4875c9826ef6183f
@@ -16,7 +16,7 @@ gather and sort such dsh-like output::
     node16: MD5 (cstest.py) = e88f238673933b08d2b36904e3a207df
     node15: MD5 (cstest.py) = 62e23bcf2e11143d4875c9826ef6183f
 
-If *file* content is made of such output, you got the following result::
+If *file* content is made of such output, you get the following result::
 
     $ clubak -b < file
     ---------------
@@ -44,13 +44,24 @@ formatting features are already included in *clush* (see *clush -b / -B / -L*
 examples, :ref:`clush-oneshot`). There are several advantages of having
 *clubak* features included in *clush*: for example, it is possible, with
 *clush*, to still get partial results when interrupted during command
-execution (eg. with *Control-C*), thing not possible by just piping commands
-together.
+execution (e.g. with *Control-C*), something not possible by just piping
+commands together.
 
 Most *clubak* options are the same as *clush*. For instance, to try to resolve
 node groups in results, use ``-r, --regroup``::
 
     $ clubak -br < file
+
+Likewise, the ``--axis`` option folds the displayed node set along selected
+*nD* axes only, as described in :ref:`clush-axis`.
+
+By default, *clubak* interprets each key (the field before the separator on
+input lines) as a node set. Use ``--interpret-keys=never`` to keep keys as
+plain strings instead, for example to gather lines by arbitrary, non-node
+keys, or ``--interpret-keys=always`` to require that every key is a valid node
+set. In ``auto`` mode (the default), *clubak* interprets keys as node sets,
+but silently switches to treating all keys as plain strings if any key
+cannot be parsed.
 
 Like *clush*, *clubak* uses the :mod:`ClusterShell.MsgTree` module of the ClusterShell
 library.
@@ -58,7 +69,7 @@ library.
 Tree trace mode (-T)
 ^^^^^^^^^^^^^^^^^^^^
 
-A special option ``-T, --tree``, only available with \clubak, can switch on
+A special option ``-T, --tree``, only available with *clubak*, can switch on
 :class:`.MsgTree` trace mode (all keys/nodes are kept for each message element
 of the tree, thus allowing special output display). This mode has been first
 added to replace *padb* [#]_ in some cases to display a whole cluster job
@@ -87,8 +98,5 @@ For example::
        bis_second_func()
 
 
-.. [#] *padb*, a parallel application debugger (http://padb.pittman.org.uk/)
-
-.. _ticket #166: https://github.com/cea-hpc/clustershell/issues/166
-.. _ticket: https://github.com/cea-hpc/clustershell/issues/new
+.. [#] *padb*, a parallel application debugger
 

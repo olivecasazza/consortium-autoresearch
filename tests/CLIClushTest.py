@@ -20,9 +20,10 @@ import unittest
 
 from subprocess import Popen, PIPE
 
-from TLib import *
+from .TLib import *
 import ClusterShell.CLI.Clush
 from ClusterShell.CLI.Clush import main
+from ClusterShell.Defaults import DEFAULTS
 from ClusterShell.NodeSet import NodeSet
 from ClusterShell.NodeSet import set_std_group_resolver, \
                                  set_std_group_resolver_config
@@ -443,10 +444,11 @@ class CLIClushTest_A(unittest.TestCase):
         curdir = os.getcwd()
         try:
             os.chdir(tdir.name)
-            s = "Warning: using '-w %s' and local path '%s' exists, was it " \
-                "expanded by the shell?\n" % (HOSTNAME, HOSTNAME)
+            s = b"Warning: using '-w %s' and local path '%s' exists, was it " \
+                b"expanded by the shell?\n" % (HOSTNAME.encode(), HOSTNAME.encode())
+            # Use regex to match start of stderr, allowing for additional warnings
             self._clush_t(["-w", HOSTNAME, "echo", "ok"], None,
-                          self.output_ok, 0, s.encode())
+                          self.output_ok, 0, re.compile(re.escape(s)))
         finally:
             os.chdir(curdir)
             tfile.close()
@@ -540,6 +542,7 @@ class CLIClushTest_A(unittest.TestCase):
                        "echo foo >&2; echo bar; sleep 2"], None,
                       s.encode(), 0, re.compile(err_rxs.encode()))
 
+    @unittest.skipIf(which('pdsh') is None, "pdsh is not installed")
     def test_032_worker_pdsh(self):
         """test clush (worker pdsh)"""
         # Warning: same as: echo -n | clush --worker=pdsh when launched from
@@ -551,6 +554,7 @@ class CLIClushTest_A(unittest.TestCase):
         self.assertRaises(EngineClientNotSupportedError, self._clush_t,
                           ["-w", HOSTNAME, "-R", "pdsh", "cat"], b"bar", None, 1)
 
+    @unittest.skipIf(which('pdsh') is None, "pdsh is not installed")
     def test_033_worker_pdsh_tty(self):
         """test clush (worker pdsh) [tty]"""
         setattr(ClusterShell.CLI.Clush, '_f_user_interaction', True)
@@ -761,6 +765,64 @@ class CLIClushTest_A(unittest.TestCase):
         finally:
             ClusterShell.CLI.Clush.ask_pass = ask_pass_save
 
+    def test_045_pipe_line_buffering(self):
+        """test clush stdout line buffering when piped (GH#597)"""
+        # Remote command emits 3 lines with a sleep between each. With the
+        # fix, lines arrive ~0.5s apart through the pipe. If clush stdout is
+        # block-buffered (the bug), all 3 arrive together at child exit.
+        python_exec = basename(sys.executable or 'python')
+        args = ['-w', HOSTNAME, '--worker=exec', '-q',
+                'for i in A B C; do echo $i; sleep 0.5; done']
+        with Popen([python_exec, '-m', 'ClusterShell.CLI.Clush'] + args,
+                   stdout=PIPE, stderr=PIPE,
+                   universal_newlines=True, bufsize=1) as process:
+            timestamps = []
+            t0 = time.monotonic()
+            for _line in process.stdout:
+                timestamps.append(time.monotonic() - t0)
+            process.wait(timeout=10)
+        self.assertEqual(len(timestamps), 3,
+                         "expected 3 lines, got %d" % len(timestamps))
+        spread = timestamps[-1] - timestamps[0]
+        # Bug signature: spread ~0 (lines released together at clush exit).
+        # Fix signature: spread ~1s. 0.5s threshold = midpoint, equally far
+        # from both signals — generous for CI jitter.
+        self.assertGreater(spread, 0.5,
+                           "lines arrived together (spread=%.3fs); "
+                           "clush stdout looks block-buffered" % spread)
+
+    def test_046_axis(self):
+        """test clush --axis (fold gathered output along selected axis)"""
+        # 2D nodeset gathered locally via exec worker; all hosts emit the
+        # same output, so the folded header reflects the requested axis.
+        base = ["-R", "exec", "-w", "foo[1-2]-[1-2]", "-b", "echo test"]
+        fold_axis_save = DEFAULTS.fold_axis
+        try:
+            DEFAULTS.fold_axis = ()
+            # no --axis: fold along all axis (default)
+            self._clush_t(base, b"",
+                          b"---------------\nfoo[1-2]-[1-2] (4)\n"
+                          b"---------------\ntest\n")
+            # --axis=1: fold first dimension only
+            self._clush_t(["--axis=1"] + base, b"",
+                          b"---------------\nfoo[1-2]-1,foo[1-2]-2 (4)\n"
+                          b"---------------\ntest\n")
+            # --axis=2: fold second dimension only
+            self._clush_t(["--axis=2"] + base, b"",
+                          b"---------------\nfoo1-[1-2],foo2-[1-2] (4)\n"
+                          b"---------------\ntest\n")
+            # --axis=-1: fold last dimension only
+            self._clush_t(["--axis=-1"] + base, b"",
+                          b"---------------\nfoo1-[1-2],foo2-[1-2] (4)\n"
+                          b"---------------\ntest\n")
+            # 1D nodeset still folds normally with --axis=1
+            self._clush_t(["--axis=1", "-R", "exec", "-w", "node[1-4]", "-b",
+                           "echo test"], b"",
+                          b"---------------\nnode[1-4] (4)\n"
+                          b"---------------\ntest\n")
+        finally:
+            DEFAULTS.fold_axis = fold_axis_save
+
 
 class CLIClushTest_B_StdinFailure(unittest.TestCase):
     """Unit test class for testing CLI/Clush.py and stdin failure"""
@@ -887,7 +949,7 @@ class CLIClushTest_E_Topology(unittest.TestCase):
 
     def setUp(self):
         self.topofile = make_temp_file(dedent("""
-                        [Main]
+                        [routes]
                         %s: localhost
                         localhost: remote-node"""% HOSTNAME).encode())
 

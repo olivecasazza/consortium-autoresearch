@@ -35,6 +35,7 @@ import sys
 
 from ClusterShell.CLI.Error import GENERIC_ERRORS, handle_generic_error
 from ClusterShell.CLI.OptionParser import OptionParser
+from ClusterShell.CLI.Utils import parse_fold_axis
 
 from ClusterShell.NodeSet import NodeSet, RangeSet, std_group_resolver
 from ClusterShell.NodeSet import grouplist, set_std_group_resolver_config
@@ -175,7 +176,8 @@ def nodeset():
     cmdcount = int(options.count) + int(options.expand) + \
                int(options.fold) + int(bool(options.list)) + \
                int(bool(options.listall)) + int(options.regroup) + \
-               int(options.groupsources) + int(options.completion)
+               int(options.groupsources) + int(options.completion) + \
+               int(options.index is not None)
     if not cmdcount:
         parser.error("No command specified.")
     elif cmdcount > 1:
@@ -196,6 +198,9 @@ def nodeset():
 
     if options.axis and (not options.fold or options.rangeset):
         parser.error("--axis option is only supported when folding nodeset")
+
+    if options.index is not None and options.pick:
+        parser.error("--index cannot be combined with --pick")
 
     if options.groupsource and not options.quiet and class_set == RangeSet:
         print("WARNING: option group source \"%s\" ignored"
@@ -299,13 +304,7 @@ def nodeset():
 
     # user-specified nD-nodeset fold axis
     if options.axis:
-        if not options.axis.startswith('-'):
-            # axis are 1-indexed in nodeset CLI (0 ignored)
-            xset.fold_axis = tuple(x-1 for x in \
-                                   RangeSet(options.axis).intiter() if x > 0)
-        else:
-            # negative axis index (only single number supported)
-            xset.fold_axis = [int(options.axis)]
+        xset.fold_axis = parse_fold_axis(options.axis)
 
     if options.pick and options.pick < len(xset):
         # convert to string for sample as nsiter() is slower for big
@@ -316,6 +315,11 @@ def nodeset():
         xset.intersection_update(keep)
 
     fmt = options.output_format # default to '%s'
+
+    # --index outputs the position of a node in the set (reverse of -I/--slice)
+    if options.index is not None:
+        print(fmt % xset.index(options.index))
+        return
 
     # Display result according to command choice
     if options.expand:
