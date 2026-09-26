@@ -127,7 +127,6 @@ jobs:
   # ── Layer 2: Docker Integration Tests (GitHub-hosted) ─────────────
   docker-integration:
     name: Docker Integration Tests
-    needs: unit
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
