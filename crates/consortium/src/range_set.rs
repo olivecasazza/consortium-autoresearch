@@ -49,7 +49,7 @@ fn sort_key(s: &str) -> (i64, i64, String) {
 
 fn sorted_elements(elements: &BTreeSet<String>) -> Vec<String> {
     let mut v: Vec<String> = elements.iter().cloned().collect();
-    v.sort_by(|a, b| sort_key(a).cmp(&sort_key(b)));
+    v.sort_by_key(|a| sort_key(a));
     v
 }
 
@@ -147,9 +147,9 @@ impl RangeSet {
     }
 
     /// Parse the begin-end part of a range, handling negative numbers.
-    fn parse_range_part<'a>(
+    fn parse_range_part(
         &self,
-        baserange: &'a str,
+        baserange: &str,
         subrange: &str,
         step: i64,
     ) -> Result<(String, String, i64, i64)> {

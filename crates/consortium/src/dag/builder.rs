@@ -12,6 +12,12 @@ use crate::dag::graph::DagGraph;
 use crate::dag::pool::{UnlimitedPool, WorkerPool};
 use crate::dag::types::{DagTask, ErrorPolicy, TaskId};
 
+/// Builds one [`DagTask`] for a given resource name.
+///
+/// Stage factories are stored boxed so a `StageDef` stays a plain owned record
+/// rather than a generic type that would infect `StageBuilder`.
+pub type StageTaskFactory = Box<dyn Fn(&str) -> Box<dyn DagTask>>;
+
 /// Programmatic DAG builder.
 ///
 /// ```rust,no_run
@@ -128,7 +134,7 @@ impl Default for DagBuilder {
 struct StageDef {
     name: String,
     concurrency_limit: Option<usize>,
-    factory: Box<dyn Fn(&str) -> Box<dyn DagTask>>,
+    factory: StageTaskFactory,
 }
 
 /// Template/stage pattern builder.
@@ -197,10 +203,11 @@ impl StageBuilder {
     where
         F: Fn(&str) -> Box<dyn DagTask> + 'static,
     {
+        let factory: StageTaskFactory = Box::new(factory);
         self.stages.push(StageDef {
             name: name.to_string(),
             concurrency_limit,
-            factory: Box::new(factory),
+            factory,
         });
         self
     }

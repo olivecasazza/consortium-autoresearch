@@ -22,11 +22,7 @@ pub struct HealthStatus {
 /// Probe all builders in the fleet and return their health status.
 pub fn check_builders(config: &FleetConfig) -> Vec<HealthStatus> {
     // TODO: parallelize with consortium's SshWorker + fanout
-    config
-        .builders
-        .values()
-        .map(|builder| check_builder(builder))
-        .collect()
+    config.builders.values().map(check_builder).collect()
 }
 
 /// Probe a single builder for health.

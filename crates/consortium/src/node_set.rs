@@ -107,7 +107,7 @@ impl NodeSetBase {
                 match (self_rs, other_rs) {
                     (Some(s), Some(o)) => {
                         let intersection = s.intersection(o);
-                        if intersection.len() > 0 {
+                        if !intersection.is_empty() {
                             result.insert(pat.clone(), Some(intersection));
                         }
                     }
@@ -130,7 +130,7 @@ impl NodeSetBase {
                 match (self_rs, other_rs) {
                     (Some(s), Some(o)) => {
                         s.difference_update(o);
-                        if s.len() == 0 {
+                        if s.is_empty() {
                             purge.push(pat.clone());
                         }
                     }
@@ -156,7 +156,7 @@ impl NodeSetBase {
                 match (self_rs.as_mut(), other_rs) {
                     (Some(s), Some(o)) => {
                         s.symmetric_difference_update(o);
-                        if s.len() == 0 {
+                        if s.is_empty() {
                             purge.push(pat.clone());
                         }
                     }
@@ -211,8 +211,8 @@ impl NodeSetBase {
             // Try substituting first N-1 indices into the pattern to match stored keys
             for n_sub in 1..indices.len() {
                 let mut candidate_pat = pat.clone();
-                for i in 0..n_sub {
-                    candidate_pat = candidate_pat.replacen("%s", &digit_strs[i], 1);
+                for digit_str in digit_strs.iter().take(n_sub) {
+                    candidate_pat = candidate_pat.replacen("%s", digit_str, 1);
                 }
                 if let Some(Some(rs)) = self.patterns.get(&candidate_pat) {
                     // Check last digit against the rangeset

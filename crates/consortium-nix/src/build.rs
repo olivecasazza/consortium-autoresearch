@@ -34,7 +34,7 @@ pub fn build_closures(
 ) -> Result<BuildResults> {
     // Generate temporary machines file if we have healthy builders
     let machines_file = healthy_builders
-        .map(|builders| generate_machines_file_from_healthy(builders))
+        .map(generate_machines_file_from_healthy)
         .transpose()?;
 
     // Shared results collected by DAG tasks

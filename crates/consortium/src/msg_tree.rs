@@ -304,7 +304,7 @@ impl<'a, K> Iterator for LinesIter<'a, K> {
         let node_key = self.current?;
         if let Some(node) = self.tree.arena.get(node_key) {
             self.current = node.parent;
-            node.msgline.as_ref().map(|msg| msg.as_slice())
+            node.msgline.as_deref()
         } else {
             None
         }
@@ -518,7 +518,7 @@ mod tests {
         tree.add("key2".to_string(), b"message2".to_vec());
         tree.add("key3".to_string(), b"message3".to_vec());
 
-        let mut walk_results: Vec<_> = tree.walk(None).collect();
+        let walk_results: Vec<_> = tree.walk(None).collect();
         assert_eq!(walk_results.len(), 3);
     }
 

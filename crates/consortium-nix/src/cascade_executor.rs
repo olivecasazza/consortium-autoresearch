@@ -187,7 +187,7 @@ impl RoundExecutor for NixCopyExecutor {
         thread::scope(|scope| {
             for &(src, tgt) in edges {
                 let tx = tx.clone();
-                let me = &*self;
+                let me = self;
                 scope.spawn(move || {
                     let outcome = me.run_edge(src, tgt);
                     let _ = tx.send(((src, tgt), outcome));
