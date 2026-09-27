@@ -1,0 +1,259 @@
+name: Perf Gate
+
+# Performance-regression detection for the criterion benches.
+#
+# Shape borrowed from migration-scorecard.yml: measure, gate, publish. The gate
+# logic itself is in autoresearch/scripts/perf-gate.sh — this workflow only
+# supplies the measurement and the baseline.
+#
+# Baseline storage: autoresearch/perf-baselines/refs/{heads,tags}/<ref>.json,
+# committed to the repo. In-repo beats a CI artifact here because baselines are
+# then reviewable, survive artifact expiry, and are pinnable per branch/tag.
+#
+# Thresholds are intentionally split:
+#   soft (5%)  -> a comment on the PR, build stays green
+#   hard (10%) -> the build fails
+#
+# Rationale: a hard-only gate trains people to ignore red. A soft band that
+# still reports loudly teaches the trend without blocking a 6% swing that is
+# probably just runner noise.
+
+on:
+  pull_request:
+    branches: [main, master, develop]
+    paths-ignore:
+      - 'doc/**'
+      - 'docs-index/**'
+      - '*.md'
+      - '.gitignore'
+  push:
+    branches: [main, master, develop]
+    tags: ['v*']
+    paths-ignore:
+      - 'doc/**'
+      - 'docs-index/**'
+      - '*.md'
+      - '.gitignore'
+  # Re-measure and (optionally) commit a refreshed baseline on demand — after a
+  # runner change, a toolchain bump, or a noisy-host incident.
+  workflow_dispatch:
+    inputs:
+      update_baseline:
+        description: "Commit a freshly measured baseline for the current ref"
+        type: boolean
+        default: false
+      soft_pct:
+        description: "Soft threshold (%) — comment, don't fail"
+        type: string
+        default: '5'
+      hard_pct:
+        description: "Hard threshold (%) — fail the build"
+        type: string
+        default: '10'
+
+concurrency:
+  group: perf-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Keep the bench set narrow and stable: these six numbers are the gate, and
+  # churning the metric set makes every baseline incomparable to the last.
+  PERF_BENCH_FILTER: '^cascade_strategies/(uniform|bimodal)/256/'
+
+jobs:
+  # ── Measure + gate the PR head against the base branch's baseline ────────
+  gate:
+    name: Perf Regression Gate
+    if: github.event_name != 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    outputs:
+      verdict: ${{ steps.gate.outputs.verdict }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install jq
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq
+
+      # Criterion's --quick still needs the bench built in release mode. Cache
+      # the target dir so the second and later runs don't rebuild the world.
+      - name: Cache cargo target
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: perf-gate-target-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: perf-gate-target-
+
+      - name: Run criterion benches
+        run: |
+          timeout 1500 cargo bench -p consortium-fanout-sim \
+            --bench cascade_strategies -- "$PERF_BENCH_FILTER" --quick
+
+      - name: Resolve baseline
+        id: baseline
+        run: |
+          # Gate against the PR's base branch. Falling back to the default
+          # branch keeps forks working, where a per-branch baseline is unlikely
+          # to exist.
+          BASE_REF='${{ github.base_ref || format('refs/heads/{0}', github.event.repository.default_branch) }}'
+          FALLBACK='${{ github.event.repository.default_branch }}'
+          mkdir -p .perf-gate
+          if bash autoresearch/scripts/perf-baseline.sh resolve \
+               --ref "$BASE_REF" --fallback-ref "$FALLBACK" \
+               > .perf-gate/path 2>.perf-gate/resolve.log; then
+            cp "$(cat .perf-gate/path)" .perf-gate/baseline.json
+            echo "Using baseline: $BASE_REF -> .perf-gate/baseline.json"
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::No perf baseline for $BASE_REF (or $FALLBACK). Skipping the gate."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Gate
+        id: gate
+        if: steps.baseline.outputs.found == 'true'
+        continue-on-error: true
+        run: |
+          set +e
+          bash autoresearch/scripts/perf-gate.sh \
+            --current target/criterion \
+            --baseline .perf-gate/baseline.json \
+            --soft-pct '${{ inputs.soft_pct || 5 }}' \
+            --hard-pct '${{ inputs.hard_pct || 10 }}' \
+            > .perf-gate/report.md
+          RC=$?
+          set -e
+
+          # 0 = pass or warn, 1 = hard fail, 3 = no signal. Only 1 fails the
+          # build; 3 is surfaced loudly rather than passed off as green.
+          case "$RC" in
+            0) VERDICT=pass ;;
+            1) VERDICT=fail ;;
+            3) VERDICT=no-signal ;;
+            *) VERDICT=error ;;
+          esac
+          echo "verdict=$VERDICT" >> "$GITHUB_OUTPUT"
+          echo "exit_code=$RC" >> "$GITHUB_OUTPUT"
+
+          cat .perf-gate/report.md >> "$GITHUB_STEP_SUMMARY"
+          echo "### Perf gate exit: $RC ($VERDICT)" >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ "$RC" == 3 ]]; then
+            echo "::error::Perf gate had no signal (no usable estimates or baseline)."
+            exit 1
+          fi
+          exit "$RC"
+
+      - name: Post perf report to the PR
+        if: always() && steps.gate.outputs.verdict != ''
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const reportPath = '.perf-gate/report.md';
+            if (!fs.existsSync(reportPath)) return;
+            const body = fs.readFileSync(reportPath, 'utf8').slice(0, 60000);
+            if (!body.trim()) return;
+            const marker = '<!-- perf-gate-report -->';
+            // Collapse repeated reports from the same run into one comment.
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: context.issue.number, per_page: 100,
+            });
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                comment_id: existing.id, body: `${marker}\n${body}`,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: context.issue.number, body: `${marker}\n${body}`,
+              });
+            }
+
+      - name: Upload perf report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-gate-report-${{ github.run_id }}
+          path: |
+            .perf-gate/
+            target/criterion/**/new/estimates.json
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Enforce hard threshold
+        # Single place that actually turns the verdict red, so the soft/warn
+        # path above can never accidentally fail the build.
+        if: steps.gate.outputs.verdict == 'fail'
+        run: |
+          echo "::error::Perf regression at or above the hard threshold."
+          exit 1
+
+  # ── Refresh the stored baseline for the branch or tag ────────────────────
+  baseline:
+    name: Record perf baseline
+    if: github.event_name == 'push' || inputs.update_baseline
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install jq
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq
+
+      - name: Cache cargo target
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: perf-baseline-target-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: perf-baseline-target-
+
+      - name: Run criterion benches
+        run: |
+          timeout 1500 cargo bench -p consortium-fanout-sim \
+            --bench cascade_strategies -- "$PERF_BENCH_FILTER" --quick
+
+      - name: Store baseline
+        id: store
+        run: |
+          REF='${{ github.ref }}'
+          bash autoresearch/scripts/perf-baseline.sh store \
+            --ref "$REF" --sha "${{ github.sha }}" \
+            --notes "measured on ${{ github.run_id }}" \
+            --est target/criterion > /dev/null
+          PATH_OUT='autoresearch/perf-baselines/refs/'"$(echo "$REF" | sed 's|^refs/||; s|/|__|g')"'.json'
+          echo "path=$PATH_OUT" >> "$GITHUB_OUTPUT"
+          echo "Stored $REF -> $PATH_OUT"
+
+      - name: Open baseline-update PR
+        if: github.event_name == 'workflow_dispatch' && inputs.update_baseline
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: perf/baseline-${{ github.run_id }}
+          commit-message: "chore(perf): refresh baseline for ${{ github.ref_name }}"
+          title: "chore(perf): refresh perf baseline for ${{ github.ref_name }}"
+          body: |
+            Automated baseline refresh triggered manually.
+
+            - ref: `${{ github.ref }}`
+            - sha: `${{ github.sha }}`
+            - run: [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+
+            The perf gate compares PRs against this file. Re-measuring is only
+            worth merging when the toolchain, runner, or workload changed — not
+            to paper over a real regression.
+          add-paths: autoresearch/perf-baselines
+          delete-branch: true

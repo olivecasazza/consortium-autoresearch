@@ -8,6 +8,7 @@ description = "Deterministic simulator for the consortium cascade primitive"
 
 [dependencies]
 consortium-nix = { workspace = true }
+consortium = { workspace = true }
 rand = "0.8"
 rand_chacha = "0.3"
 

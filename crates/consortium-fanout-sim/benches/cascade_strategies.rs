@@ -23,8 +23,40 @@ use consortium_nix::cascade::{CascadeStrategy, Log2FanOut};
 use consortium_nix::cascade_strategies::{MaxBottleneckSpanning, SteinerGreedy};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 
+/// Deliberate slowdown used by the perf-gate acceptance test.
+///
+/// Reads `CONSORTIUM_PERF_REGRESSION_PCT` (default `0`, i.e. off) and burns
+/// that percentage of the measured wall time in a black-boxed spin loop. It is
+/// *self-calibrating* — the delay scales with how long the scenario actually
+/// took — so a "10% regression" is 10% on any host, CI runner included, rather
+/// than a fixed number of iterations that would mean something different on
+/// every machine.
+///
+/// Unset in normal bench runs, so the shipped signal is unmodified; see
+/// `autoresearch/scripts/test-perf-gate-e2e.sh`.
+fn burn_regression_pct(elapsed: std::time::Duration) {
+    let pct: f64 = std::env::var("CONSORTIUM_PERF_REGRESSION_PCT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0.0);
+    if pct <= 0.0 {
+        return;
+    }
+    let target = elapsed.as_secs_f64() * pct / 100.0;
+    let start = std::time::Instant::now();
+    let mut acc = std::hint::black_box(0u64);
+    while start.elapsed().as_secs_f64() < target {
+        for i in 0..256u64 {
+            acc = acc.wrapping_add(i.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        }
+    }
+    std::hint::black_box(acc);
+}
+
 fn run_strategy(cfg: &ScenarioConfig, strategy: &dyn CascadeStrategy) -> u32 {
+    let start = std::time::Instant::now();
     let r = Scenario::new(cfg.clone()).run(strategy);
+    burn_regression_pct(start.elapsed());
     // Touch result so the optimizer can't elide the run.
     std::hint::black_box(r.converged.len() as u32 + r.rounds)
 }
@@ -36,6 +68,7 @@ fn bench_uniform_256(c: &mut Criterion) {
         seed_fraction: 0.0,
         closure_bytes: 50 * 1024 * 1024,
         bandwidth: BandwidthDistribution::Uniform(100 * 1024 * 1024),
+        uplinks: None,
         failures: FailureSchedule::None,
         max_rounds: 32,
     };
@@ -60,6 +93,7 @@ fn bench_bimodal_256(c: &mut Criterion) {
             fast: 1024 * 1024 * 1024,
             fast_fraction: 0.3,
         },
+        uplinks: None,
         failures: FailureSchedule::None,
         max_rounds: 32,
     };
@@ -84,6 +118,7 @@ fn bench_bimodal_512(c: &mut Criterion) {
             fast: 1024 * 1024 * 1024,
             fast_fraction: 0.3,
         },
+        uplinks: None,
         failures: FailureSchedule::None,
         max_rounds: 32,
     };
