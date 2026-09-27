@@ -263,7 +263,37 @@ jobs:
         if: always()
         run: python harness/render_summary.py --results-dir=results >> $GITHUB_STEP_SUMMARY
 
+      # ── CON-4 graduation gate ─────────────────────────────────
+      # The gate's own self-tests run first: they are what stops someone from
+      # "fixing" a FAIL by weakening the gate. They are fast and hermetic.
+      - name: Test the graduation gate
+        run: |
+          source .venv/bin/activate
+          python -m pytest harness/test_graduation_gate.py -q
+
+      # The single boolean that says whether the side-by-side oracle can be
+      # retired. Non-blocking by design: at 6.3% coverage it is *supposed* to
+      # report FAIL, and a hard-failing required check would red every PR until
+      # the porting stream reaches the floor. It is wired, reported and
+      # archived, and it becomes blocking when it first reports PASS.
+      # Flip to blocking then: delete `continue-on-error: true` below.
+      - name: CON-4 graduation gate
+        id: graduation-gate
+        continue-on-error: true
+        run: |
+          source .venv/bin/activate
+          python harness/graduation_gate.py \
+            --results-dir=results \
+            --json-out=results/graduation-gate.json
+
       # ── Upload artifacts ───────────────────────────────────────
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: graduation-gate-report
+          path: results/graduation-gate.json
+          retention-days: 90
+
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
