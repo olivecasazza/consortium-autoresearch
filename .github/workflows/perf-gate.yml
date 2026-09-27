@@ -6,17 +6,26 @@ name: Perf Gate
 # logic itself is in autoresearch/scripts/perf-gate.sh — this workflow only
 # supplies the measurement and the baseline.
 #
-# Baseline storage: autoresearch/perf-baselines/refs/{heads,tags}/<ref>.json,
-# committed to the repo. In-repo beats a CI artifact here because baselines are
-# then reviewable, survive artifact expiry, and are pinnable per branch/tag.
+# The verdict comes from a PAIRED measurement: the base commit and the PR head
+# are benched back to back in the same job, on the same host. That is not an
+# optimisation, it is the only way the number means anything — see the comment
+# above the base checkout for the measurement that forced it. A baseline stored
+# in a previous job was measured on a different VM, and those differ by tens of
+# percent, which swamps any threshold worth having.
+#
+# The committed baseline (autoresearch/perf-baselines/refs/{heads,tags}/<ref>.json,
+# written by the `Record perf baseline` job) is kept for a different job: it is
+# the reviewable, pinnable record of what this branch measured, so a change in
+# the committed number is itself a reviewable event. It is not the verdict.
 #
 # Thresholds are intentionally split:
 #   soft (5%)  -> a comment on the PR, build stays green
 #   hard (10%) -> the build fails
 #
 # Rationale: a hard-only gate trains people to ignore red. A soft band that
-# still reports loudly teaches the trend without blocking a 6% swing that is
-# probably just runner noise.
+# still reports loudly teaches the trend without blocking a 6% swing.
+# Paired measurement is what makes a 5/10 split credible: the same-host spread
+# is well under 1%, so 5% is genuinely a drift and 10% is genuinely a regression.
 
 on:
   pull_request:
@@ -97,31 +106,82 @@ jobs:
         uses: actions/cache@v4
         with:
           path: target
-          key: perf-gate-target-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: perf-gate-target-
+          key: perf-gate-head-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: perf-gate-head-
 
-      - name: Run criterion benches
+      - name: Run criterion benches (PR head)
         run: |
           timeout 1500 cargo bench -p consortium-fanout-sim \
             --bench cascade_strategies -- "$PERF_BENCH_FILTER" --quick
 
-      - name: Resolve baseline
+      # ── Paired measurement ────────────────────────────────────────────────
+      #
+      # The stored baseline cannot be the verdict, because a stored baseline and
+      # the PR head are almost never measured on the same machine. Measured on
+      # this repo, two criterion runs of ONE commit had a 95% CI of 0.08%
+      # within each run, while the two runs' means differed by 45% and 82%
+      # (runs 36297226582 attempt 1 and 2 vs the stored baseline). That gap is
+      # not sampling noise -- it is the runner: each job lands on a different
+      # VM whose sustained throughput differs by tens of percent. No threshold
+      # below that spread can distinguish a real regression from a faster host.
+      #
+      # So measure the base commit and the PR head in the SAME job, back to back,
+      # on the SAME host. The host term cancels and what is left is the change
+      # under test. This costs a second bench run; it is the only way the number
+      # means anything.
+      - name: Check out the base commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.base_ref }}
+          path: base
+          # Shallow is enough: we build the base, we do not diff it.
+          fetch-depth: 1
+
+      - name: Cache base cargo target
+        uses: actions/cache@v4
+        with:
+          path: base/target
+          # A separate key from the head cache on purpose: actions/cache stores
+          # the paths it archived *under that key*, so sharing one key would
+          # archive target/ or base/target/ but never both, and whichever side
+          # lost would rebuild from cold on every run.
+          key: perf-gate-base-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: perf-gate-base-
+
+      - name: Run criterion benches (base commit)
+        run: |
+          cd base
+          timeout 1500 cargo bench -p consortium-fanout-sim \
+            --bench cascade_strategies -- "$PERF_BENCH_FILTER" --quick
+
+      - name: Build the paired baseline
         id: baseline
         run: |
-          # Gate against the PR's base branch. Falling back to the default
-          # branch keeps forks working, where a per-branch baseline is unlikely
-          # to exist.
-          BASE_REF='${{ github.base_ref || format('refs/heads/{0}', github.event.repository.default_branch) }}'
-          FALLBACK='${{ github.event.repository.default_branch }}'
           mkdir -p .perf-gate
-          if bash autoresearch/scripts/perf-baseline.sh resolve \
-               --ref "$BASE_REF" --fallback-ref "$FALLBACK" \
-               > .perf-gate/path 2>.perf-gate/resolve.log; then
+          BASE='${{ github.base_ref }}'
+          # Reuse the store path purely as a "criterion tree -> baseline doc"
+          # converter; the result goes to a scratch dir and is never committed.
+          # Ask resolve where it landed rather than predicting the filename --
+          # the two must not be able to drift apart.
+          if bash base/autoresearch/scripts/perf-baseline.sh store \
+               --ref "$BASE" \
+               --dir .perf-gate/paired \
+               --est base/target/criterion \
+               --notes "paired with ${{ github.sha }} on the same host" \
+               > /dev/null 2>.perf-gate/store.log \
+             && bash base/autoresearch/scripts/perf-baseline.sh resolve \
+               --dir .perf-gate/paired --ref "$BASE" \
+               > .perf-gate/path 2>>.perf-gate/store.log; then
             cp "$(cat .perf-gate/path)" .perf-gate/baseline.json
-            echo "Using baseline: $BASE_REF -> .perf-gate/baseline.json"
+            echo "Paired baseline: $BASE measured in-job -> .perf-gate/baseline.json"
+            jq -r '"  " + (.metrics | to_entries[] | "\(.key)=\(.value)")' \
+              .perf-gate/baseline.json
             echo "found=true" >> "$GITHUB_OUTPUT"
           else
-            echo "::warning::No perf baseline for $BASE_REF (or $FALLBACK). Skipping the gate."
+            # A gate that cannot measure must not read as green. perf-gate.sh
+            # refuses to pass on no signal, and so does this workflow.
+            echo "::error::Could not measure the base commit in-job; the gate has no signal."
+            sed 's/^/::error::  /' .perf-gate/store.log || true
             echo "found=false" >> "$GITHUB_OUTPUT"
           fi
 
@@ -206,8 +266,14 @@ jobs:
         # with continue-on-error, so *every* non-green verdict has to be caught
         # here or it reports success: 'error' (usage failure) and 'no-signal'
         # (dead bench) must not read as a pass.
-        if: steps.gate.outputs.verdict != 'pass' && steps.gate.outputs.verdict != ''
+        if: >-
+          steps.gate.outputs.verdict != 'pass' ||
+          (steps.baseline.outputs.found != 'true' && steps.baseline.outputs.found != '')
         run: |
+          if [[ "${{ steps.baseline.outputs.found }}" != 'true' && -z "${{ steps.gate.outputs.verdict }}" ]]; then
+            echo "::error::No paired baseline: the base commit could not be measured in this job, so there is nothing to compare against. Not reporting green."
+            exit 1
+          fi
           case "${{ steps.gate.outputs.verdict }}" in
             fail) echo "::error::Perf regression at or above the hard threshold." ;;
             *)    echo "::error::Perf gate could not produce a verdict (${{ steps.gate.outputs.verdict }}, exit ${{ steps.gate.outputs.exit_code }}). Treating a perf gate that cannot measure as a failure, not a pass." ;;
