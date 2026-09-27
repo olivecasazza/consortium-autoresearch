@@ -4,6 +4,7 @@ RUN apk add --no-cache \
     openssh-server \
     bash \
     coreutils \
+    iproute2 \
     && ssh-keygen -A \
     && mkdir -p /root/.ssh \
     && chmod 700 /root/.ssh \

@@ -31,6 +31,10 @@ use std::time::{Duration, Instant};
 use consortium::worker::ssh::SshOptions;
 use consortium_nix::config::{DeploymentNode, FleetConfig, ProfileType};
 
+pub mod netem;
+
+pub use netem::{NetemProfile, DEFAULT_IFACE};
+
 /// Cluster topology configuration.
 #[derive(Debug, Clone)]
 pub struct ClusterTopology {
@@ -235,6 +239,105 @@ impl DockerCluster {
     /// Total number of nodes.
     pub fn node_count(&self) -> usize {
         self.node_ports.len()
+    }
+
+    // ─── Network shaping ───────────────────────────────────────────────────
+
+    /// Impose a `netem` profile on one node's network interface.
+    ///
+    /// This is the container-side half of a sim↔container calibration: the sim
+    /// models bandwidth + latency per edge, and without shaping here the two
+    /// tiers are not comparable (ADR 0001 §7.1).
+    ///
+    /// Rejects an empty profile rather than running a `tc` command that exits 0
+    /// and shapes nothing — see [`netem`] for why that no-op matters.
+    pub fn apply_netem(
+        &self,
+        node: &str,
+        profile: &NetemProfile,
+        iface: &str,
+    ) -> Result<(), String> {
+        let args = profile.qdisc_args(iface)?;
+        self.exec_in_node(node, "tc", &args)
+    }
+
+    /// Remove shaping from one node's interface, restoring the kernel default
+    /// qdisc.
+    ///
+    /// Idempotent: an already-unshaped interface reports no such qdisc, which
+    /// this treats as success. Without that, teardown would fail on any node a
+    /// test never shaped and shaping would leak between tests.
+    pub fn clear_netem(&self, node: &str, iface: &str) -> Result<(), String> {
+        match self.exec_in_node(node, "tc", &NetemProfile::clear_args(iface)) {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                if is_absent_qdisc(&err) {
+                    Ok(())
+                } else {
+                    Err(err)
+                }
+            }
+        }
+    }
+
+    /// Current root qdisc on one node's interface, as `tc qdisc show` reports it.
+    ///
+    /// Useful for asserting *which* profile is installed. Note that reading this
+    /// back only proves `tc` was asked to apply the profile; asserting that
+    /// shaping actually took effect means measuring timing, not parsing this.
+    pub fn qdisc_show(&self, node: &str, iface: &str) -> Result<String, String> {
+        self.exec_capture_in_node(
+            node,
+            "tc",
+            &[
+                "qdisc".to_string(),
+                "show".to_string(),
+                "dev".to_string(),
+                iface.to_string(),
+            ],
+        )
+    }
+
+    fn exec_in_node(&self, node: &str, program: &str, args: &[String]) -> Result<(), String> {
+        self.exec_capture_in_node(node, program, args).map(|_| ())
+    }
+
+    fn exec_capture_in_node(
+        &self,
+        node: &str,
+        program: &str,
+        args: &[String],
+    ) -> Result<String, String> {
+        if !self.node_ports.contains_key(node) {
+            return Err(format!("unknown node {node} in this cluster"));
+        }
+        let compose_file = self
+            .compose_file
+            .to_str()
+            .ok_or_else(|| "compose file path is not valid UTF-8".to_string())?;
+
+        let output = Command::new("docker")
+            .args([
+                "compose",
+                "-f",
+                compose_file,
+                "-p",
+                &self.project_name,
+                "exec",
+                "-T",
+                node,
+                program,
+            ])
+            .args(args)
+            .output()
+            .map_err(|e| format!("docker compose exec {node} {program} failed: {e}"))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("{program} on {node} failed: {stderr}"));
+        }
+
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
     }
 
     // ─── Internal ────────────────────────────────────────────────────────
@@ -466,6 +569,17 @@ impl Drop for DockerCluster {
     }
 }
 
+/// Whether a `tc` failure means "there was nothing to delete" rather than a
+/// real error.
+///
+/// `tc qdisc del` on an unshaped interface fails with `RTNETLINK answers: No
+/// such file or directory` (and on some kernels `Cannot find specified qdisc`).
+/// Teardown must treat that as already-clear, otherwise clearing shaping is
+/// not idempotent and a node a test never shaped fails the teardown.
+fn is_absent_qdisc(err: &str) -> bool {
+    err.contains("No such file or directory") || err.contains("Cannot find specified qdisc")
+}
+
 /// Check if Docker is available. Returns false if docker is not installed
 /// or the daemon is not running.
 pub fn docker_available() -> bool {
@@ -474,4 +588,35 @@ pub fn docker_available() -> bool {
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod netem_teardown_tests {
+    use super::is_absent_qdisc;
+
+    #[test]
+    fn absent_qdisc_messages_are_treated_as_already_clear() {
+        // The exact stderr `tc qdisc del` produces on an unshaped interface.
+        assert!(is_absent_qdisc(
+            "tc on compute-01 failed: RTNETLINK answers: No such file or directory"
+        ));
+        assert!(is_absent_qdisc(
+            "tc on compute-01 failed: Error: Cannot find specified qdisc."
+        ));
+    }
+
+    #[test]
+    fn real_tc_failures_are_not_swallowed() {
+        // If these were treated as "already clear", a genuine shaping failure
+        // would be silently ignored and the next test would run unshaped.
+        assert!(!is_absent_qdisc(
+            "tc on compute-01 failed: Error: Exclusivity flag on, cannot modify"
+        ));
+        assert!(!is_absent_qdisc(
+            "tc on compute-01 failed: command not found"
+        ));
+        assert!(!is_absent_qdisc(
+            "docker compose exec compute-01 tc failed: No such container"
+        ));
+    }
 }
