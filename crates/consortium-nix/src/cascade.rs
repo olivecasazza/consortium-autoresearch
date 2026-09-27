@@ -410,8 +410,9 @@ pub trait TraceSink: Send + Sync {
 /// - `.max_rounds(n)` — sanity bound, default 64
 ///
 /// Realism is opt-in by *describing more of the network* via
-/// [`NetworkBuilder::uplinks`] / [`NetworkBuilder::downlinks`], not by
-/// flipping a mode flag here.
+/// [`NetworkBuilder::nodes`] (per-node `NodeSpec { uplink, downlink }`)
+/// / [`NetworkBuilder::uplinks_uniform`], not by flipping a mode flag
+/// here.
 ///
 /// # Example
 ///

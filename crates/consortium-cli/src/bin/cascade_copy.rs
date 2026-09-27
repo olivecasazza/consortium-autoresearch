@@ -2,7 +2,7 @@
 //! using the cascade primitive + real `nix copy` over SSH.
 //!
 //! Usage:
-//!   cascade-copy <STORE_PATH> --inventory hosts.toml [opts]
+//!   cascade-copy <STORE_PATH> --inventory hosts.toml `[opts]`
 //!
 //! Drives a real cascade against actual hosts:
 //! - The seed host (from inventory) `nix copy`s the path to its
