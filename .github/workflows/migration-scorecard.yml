@@ -144,8 +144,14 @@ jobs:
       # ── Python tests: original backend ─────────────────────────
       # `continue-on-error` and the trailing `|| true` are both removed: this is
       # the step that decides whether a red Python test is red CI.
+      # `if: ${{ !cancelled() }}` added: GitHub's default step condition is
+      # `success()`, so a red Rust unit suite used to leave this step *skipped*.
+      # A skipped test step is the same defect as a swallowed one — the Python
+      # signal never reaches the job conclusion at all. `!cancelled()` keeps the
+      # step reachable after the Rust step fails without masking its own result.
       - name: Run Python tests (original backend)
         id: py_original
+        if: ${{ !cancelled() }}
         env:
           CONSORTIUM_BACKEND: python
           PYTHONPATH: ${{ github.workspace }}/lib
@@ -168,8 +174,16 @@ jobs:
           require_tests: true
 
       # ── Python tests: Rust backend ─────────────────────────────
+      # CON-97: `if: ${{ !cancelled() }}` added. GitHub's default step condition is
+      # `success()`, so while the original-backend step above was red this step was
+      # *skipped* — a red test in the Rust backend could not be observed at all, and
+      # `results/python-rust.xml` was never written. A skipped test step is the same
+      # defect as a swallowed one: the signal never reaches the job conclusion.
+      # `!cancelled()` keeps the step reachable after a sibling failure; it does not
+      # mask anything, because its own exit code still decides the step conclusion.
       - name: Run Python tests (Rust backend)
         id: py_rust
+        if: ${{ !cancelled() }}
         env:
           CONSORTIUM_BACKEND: rust
         run: |
@@ -281,7 +295,11 @@ jobs:
             -- --test-threads=1 \
             -Z unstable-options --format json 2>&1 | tee results-integration.json
 
+      # CON-97: `if: ${{ !cancelled() }}` added for the same reason as the Python
+      # steps above. With the default `success()` condition a red 6-node suite left
+      # the 33-node suite `skipped`, so the scale test could never report red.
       - name: Run integration tests (large cluster — 33 nodes)
+        if: ${{ !cancelled() }}
         run: |
           cargo test -p consortium-crate \
             --features docker-tests \
