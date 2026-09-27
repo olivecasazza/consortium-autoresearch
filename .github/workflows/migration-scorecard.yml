@@ -212,8 +212,17 @@ jobs:
       #   CLI{Clubak,Lush,Config,Display,Nodeset}Test, NodeSetTest,
       #   RangeSetNDTest, TreeTopologyTest
       # They are left erroring rather than deselected — a collection error is a
-      # legitimate red, and these eight are the migration's remaining work made
-      # visible instead of hidden. See CON-116 / CON-34.
+      # legitimate red, and hiding it is the defect CON-97 exists to stop. See
+      # CON-34 / CON-206 for the two unported features behind all 8.
+      #
+      # `--continue-on-collection-errors` is NOT a swallow, and is the opposite of
+      # one. pytest's default is to run *zero* tests when anything fails to
+      # collect, so those 8 modules were discarding the other 728 and the junit
+      # report said "8 tests run, 0 passed" — one un-importable module blinding
+      # the entire backend. With the flag, the 8 still fail the step (they are
+      # reported as errors and `fail_on_failure` still goes red) and the other
+      # 728 finally produce signal. The original-backend step collects 100% and
+      # does not need it.
       - name: Run Python tests (Rust backend)
         id: py_rust
         if: ${{ !cancelled() }}
@@ -225,6 +234,7 @@ jobs:
           python -m pytest tests/ -v \
             --timeout=30 \
             --tb=short \
+            --continue-on-collection-errors \
             --junit-xml=results/python-rust.xml
 
       - name: Publish Python results (Rust backend)
