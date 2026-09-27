@@ -1311,10 +1311,9 @@ mod tests {
         );
     }
 
-    /// 7. LiveTreeRenderer emits a frame on each PlanComputed +
-    /// RoundCompleted + Finished, uses cursor-home + clear-screen
-    /// escapes (alt-screen idiom, like top/htop/vim/less), and
-    /// captures multiple distinct frames over the cascade lifetime.
+    /// 7. LiveTreeRenderer emits a frame per event, uses cursor-home +
+    /// clear-screen escapes (alt-screen idiom, like top/htop/vim/less),
+    /// and captures multiple distinct frames over the cascade lifetime.
     /// Also verifies priority sorting: Failed nodes appear before Ok
     /// nodes in the rendered output (nom/State/Sorting.hs order).
     #[test]
@@ -1324,47 +1323,50 @@ mod tests {
         // n2 (Failed) should appear before n1 (Ok) in the final frame
         // due to priority sorting (Failed → priority 0, Ok → priority 3).
         //
-        // Capture mode bypasses the 60ms gate, so all 4 paint-triggering
-        // events (PlanComputed, RoundCompleted, Finished) still produce frames.
-        let renderer = LiveTreeRenderer::with_capture(false, None);
+        // Repaint policy: `LiveTreeRenderer::emit` repaints on **every**
+        // event, not only round boundaries — the 60ms gate throttles the
+        // redraw rate in real use, so a long round shows edges flipping
+        // ⏸ → ⏵ → ✔ in flight. Capture mode bypasses that gate (wall-time
+        // pacing is meaningless when a test emits its events in µs), so
+        // every event below paints exactly one frame. The expected marker
+        // count is therefore derived from the event list rather than
+        // hard-coded: a repaint-policy change has to move it here on
+        // purpose, instead of leaving a stale constant to rot on master.
+        let events = vec![
+            started_event(&[0]),
+            CascadeEvent::PlanComputed {
+                round: 0,
+                assignments: vec![
+                    Edge {
+                        src: NodeId(0),
+                        tgt: NodeId(1),
+                    },
+                    Edge {
+                        src: NodeId(0),
+                        tgt: NodeId(2),
+                    },
+                ],
+            },
+            edge_completed(0, 0, 1, 5), // n1 → Ok
+            edge_failed(0, 0, 2),       // n2 → Failed
+            CascadeEvent::RoundCompleted {
+                round: 0,
+                duration: Duration::from_millis(5),
+                has_closure: vec![NodeId(0), NodeId(1)],
+            },
+            edge_completed(1, 1, 3, 5),
+            CascadeEvent::RoundCompleted {
+                round: 1,
+                duration: Duration::from_millis(5),
+                has_closure: vec![NodeId(0), NodeId(1), NodeId(3)],
+            },
+            finished(3, 1, 2),
+        ];
 
-        renderer.emit(&CascadeEvent::Started {
-            n_nodes: 4,
-            seeded: vec![NodeId(0)],
-            strategy: "log2-fanout".into(),
-            at: SystemTime::UNIX_EPOCH,
-        });
-        renderer.emit(&CascadeEvent::PlanComputed {
-            round: 0,
-            assignments: vec![
-                Edge {
-                    src: NodeId(0),
-                    tgt: NodeId(1),
-                },
-                Edge {
-                    src: NodeId(0),
-                    tgt: NodeId(2),
-                },
-            ],
-        });
-        renderer.emit(&edge_completed(0, 0, 1, 5)); // n1 → Ok
-        renderer.emit(&edge_failed(0, 0, 2)); // n2 → Failed
-        renderer.emit(&CascadeEvent::RoundCompleted {
-            round: 0,
-            duration: Duration::from_millis(5),
-            has_closure: vec![NodeId(0), NodeId(1)],
-        });
-        renderer.emit(&edge_completed(1, 1, 3, 5));
-        renderer.emit(&CascadeEvent::RoundCompleted {
-            round: 1,
-            duration: Duration::from_millis(5),
-            has_closure: vec![NodeId(0), NodeId(1), NodeId(3)],
-        });
-        renderer.emit(&CascadeEvent::Finished {
-            converged: 3,
-            failed: 1,
-            rounds: 2,
-        });
+        let renderer = LiveTreeRenderer::with_capture(false, None);
+        for ev in &events {
+            renderer.emit(ev);
+        }
 
         let captured = renderer.captured();
 
@@ -1374,22 +1376,49 @@ mod tests {
         // was 0). Subsequent frames clear the previous frame line-by-
         // line: `\x1b[2K` for the bottom line, then `\x1b[1A\x1b[2K`
         // for each line above.
-        //
-        // Test events: PlanComputed → frame 1, RoundCompleted×2 → frames
-        // 2-3, Finished → frame 4. Total 4 sync-update begin markers.
-        // (Capture mode bypasses the 60ms gate so all 4 paint.)
         let sync_begin = captured.matches("\x1b[?2026h").count();
         assert_eq!(
-            sync_begin, 4,
-            "expected exactly 4 synchronized-update begin markers (one per repaint); got {sync_begin}\n{captured:?}"
+            sync_begin,
+            events.len(),
+            "expected one synchronized-update begin marker per emitted event \
+             (one repaint per event, 60ms gate bypassed in capture mode); \
+             got {sync_begin} for {} events\n{captured:?}",
+            events.len()
         );
         let sync_end = captured.matches("\x1b[?2026l").count();
         assert_eq!(
-            sync_end, 4,
-            "synchronized-update markers should be balanced"
+            sync_end, sync_begin,
+            "synchronized-update markers should be balanced (one end per begin)"
         );
-        // Frames 2, 3, 4 each emit at least one clear-line escape
-        // (\x1b[2K) since they're erasing prior content. Don't assert
+        // "Multiple distinct frames over the cascade lifetime" is the
+        // claim this test exists to check, so check it rather than assume
+        // it. Events that add no visual state (RoundCompleted, Finished
+        // here) legitimately repaint an identical frame, so compare
+        // distinct frame bodies instead of demanding all-N differ.
+        let mut distinct_frames: Vec<String> = Vec::new();
+        for frame in captured.split("\x1b[?2026h").skip(1) {
+            let body = frame
+                .split("\x1b[?2026l")
+                .next()
+                .expect("every frame is closed by a sync-end marker")
+                // drop the erase-in-place prologue (clear-line + cursor-up
+                // + carriage return) so only the rendered text remains
+                .replace("\x1b[2K", "")
+                .replace("\x1b[1A", "")
+                .replace('\r', "");
+            if !distinct_frames.contains(&body) {
+                distinct_frames.push(body);
+            }
+        }
+        assert!(
+            distinct_frames.len() >= 4,
+            "expected at least 4 distinct frames as the cascade advances \
+             (started → planned → n1 ok → n2 failed → n3 ok); got {} distinct \
+             of {sync_begin} frames — the redraw is not accumulating state\n{captured:?}",
+            distinct_frames.len()
+        );
+        // Every frame after the first emits at least one clear-line escape
+        // (\x1b[2K) since it's erasing prior content. Don't assert
         // exact count — depends on how many lines the prior frame had.
         let clear_lines = captured.matches("\x1b[2K").count();
         assert!(
