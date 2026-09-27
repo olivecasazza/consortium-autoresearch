@@ -35,6 +35,8 @@ if ! command -v cargo >/dev/null 2>&1; then
     exec nix develop "$FLAKE_DIR" --command bash "$0" "$@"
 fi
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
 # Find the main repo (worktrees share one .git dir; the baseline file
 # lives in the main checkout).
 MAIN_REPO="$(git worktree list --porcelain | head -1 | awk '{print $2}')"
@@ -143,6 +145,91 @@ if [[ -n "$PERF_SCRIPT" ]]; then
         echo "=== FAIL: perf ===" >&2
         cat "$TMP/perf.err" >&2
         FAIL=$((FAIL + 1))
+    fi
+fi
+
+# Gate 6 (differential): perf *regression* gate, applied to every task type.
+#
+# Gate 5 only fires for the two perf task types, and it asks "did the thing you
+# were told to optimize get faster?". This gate asks the orthogonal question for
+# all tasks: "did anything measurable get slower?". A refactor that quietly
+# doubles the cascade solver's wall time passes every other gate here.
+#
+# Thresholds are split soft/hard, matching the CI gate in
+# .github/workflows/perf-gate.yml:
+#   - above the hard threshold (default 10%) -> FAIL, the task is rejected
+#   - between soft (5%) and hard             -> WARN, task still passes
+# A hard-only gate would be ignored, so the soft band reports without blocking.
+#
+# Skipped (not failed) when there is no stored master baseline, so the gate can
+# never wedge the loop before a baseline has been recorded.
+PERF_GATE_SOFT="${AR_PERF_SOFT_PCT:-5}"
+PERF_GATE_HARD="${AR_PERF_HARD_PCT:-10}"
+
+# run_perf_gate <baseline> — gate the estimates already in target/criterion.
+# Sets PERF_GATE_EXIT and PERF_GATE_HEADLINE.
+run_perf_gate() {
+    local baseline="$1"
+    local report
+    report=$(bash "$SCRIPT_DIR/perf-gate.sh" \
+        --current "$WORKTREE/target/criterion" \
+        --baseline "$baseline" \
+        --soft-pct "$PERF_GATE_SOFT" --hard-pct "$PERF_GATE_HARD" \
+        2>"$TMP/perf-gate.err")
+    PERF_GATE_EXIT=$?
+    # Drop the emoji/markdown lead-in so the SUMMARY lines up with the other
+    # gates, which are plain "PASS  <gate>" / "FAIL  <gate>" rows.
+    PERF_GATE_HEADLINE=$(printf '%s\n' "$report" | head -n 1 | sed 's/^[^[:alnum:]]*//')
+}
+
+if [[ -n "${AR_SKIP_PERF_GATE:-}" ]]; then
+    SUMMARY+="SKIP  perf-regression (AR_SKIP_PERF_GATE set)"$'\n'
+else
+    PERF_BASELINE=$(bash "$SCRIPT_DIR/perf-baseline.sh" resolve \
+        --ref "${AR_PERF_BASELINE_REF:-master}" \
+        --fallback-ref "${AR_PERF_FALLBACK_REF:-}" \
+        --dir "$MAIN_REPO/autoresearch/perf-baselines" 2>/dev/null || true)
+
+    if [[ -z "$PERF_BASELINE" ]]; then
+        SUMMARY+="SKIP  perf-regression (no stored baseline; measure with compute-baseline.sh, then perf-baseline.sh store)"$'\n'
+    else
+        NEEDS_BENCH=1
+        if [[ -n "$PERF_SCRIPT" ]]; then
+            # score-perf-cascade.sh (or score-perf.sh) already ran the bench
+            # earlier in this same score.sh run, so its estimates are on disk.
+            # Re-gate them rather than paying for a second bench run.
+            NEEDS_BENCH=0
+        else
+            if ! timeout "${AR_PERF_BENCH_TIMEOUT:-600}" cargo bench \
+                    -p consortium-fanout-sim --bench cascade_strategies -- \
+                    '^cascade_strategies/(uniform|bimodal)/256/' --quick \
+                    >"$TMP/perf-gate-bench.log" 2>&1; then
+                # A dead bench is not a perf regression. Do not let a build or
+                # toolchain problem masquerade as one, and do not wedge the loop.
+                NEEDS_BENCH=0
+                BENCH_FAILED=1
+            fi
+        fi
+
+        if [[ "$BENCH_FAILED" == 1 ]]; then
+            SUMMARY+="SKIP  perf-regression (cargo bench failed; see stderr)"$'\n'
+            echo "=== SKIP: perf-regression bench did not run ===" >&2
+            tail -n 20 "$TMP/perf-gate-bench.log" >&2
+        else
+            run_perf_gate "$PERF_BASELINE"
+            case "$PERF_GATE_EXIT" in
+                0) SUMMARY+="PASS  perf-regression — ${PERF_GATE_HEADLINE}"$'\n' ;;
+                1)
+                    SUMMARY+="FAIL  perf-regression (at or above the ${PERF_GATE_HARD}% hard threshold)"$'\n'
+                    echo "=== FAIL: perf-regression ===" >&2
+                    cat "$TMP/perf-gate.err" >&2
+                    FAIL=$((FAIL + 1))
+                    ;;
+                *)
+                    SUMMARY+="SKIP  perf-regression (no signal: $(tail -n 1 "$TMP/perf-gate.err" 2>/dev/null))"$'\n'
+                    ;;
+            esac
+        fi
     fi
 fi
 

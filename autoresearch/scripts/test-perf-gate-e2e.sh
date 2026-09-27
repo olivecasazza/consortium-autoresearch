@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # test-perf-gate-e2e.sh — acceptance proof for the perf gate.
 #
-# Usage: bash test-perf-gate-e2e.sh [--pct N] [--soft N] [--hard N]
+# Usage: bash test-perf-gate-e2e.sh [--phase all|baseline|gate] [options]
 #
 # Runs the real cascade bench twice against the real gate:
 #
@@ -15,8 +15,21 @@
 # This is the acceptance criterion from the issue: a deliberate ~10% regression
 # in a key metric is caught.
 #
-# Cost: two bench runs. Pass --keep-criterion to reuse an existing
-# target/criterion (skips run 1 — only valid if the current tree is clean).
+# ── Why --phase exists ───────────────────────────────────────────────────────
+# Each phase is one `cargo bench`, and two of them do not reliably fit inside a
+# single agent heartbeat run cap. Running the whole thing in one go is what
+# killed the first attempt at this acceptance (see CON-21). Split it:
+#
+#   bash test-perf-gate-e2e.sh --phase baseline   # one bench run, stores baseline
+#   bash test-perf-gate-e2e.sh --phase gate       # one bench run, asserts the fail
+#
+# Both phases write into --store, which defaults to the repo's own
+# autoresearch/perf-baselines so phase gate can find phase baseline's output
+# even across separate runs and separate worktrees.
+#
+# Cost: one bench run per phase. --keep-criterion reuses an existing
+# target/criterion instead of running the bench (only valid if the current tree
+# is clean and the estimates on disk are the ones you want).
 
 set -uo pipefail
 
@@ -30,57 +43,95 @@ BASELINE_SH="$HERE/perf-baseline.sh"
 PCT=10
 SOFT=5
 HARD=10
+PHASE=all
 STORE_DIR="$REPO_ROOT/autoresearch/perf-baselines"
+BASE_REF="e2e-baseline"
 EXPECT_VERDICT=fail
 KEEP=0
+BENCH_TIMEOUT="${PERF_E2E_BENCH_TIMEOUT:-900}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --pct)   PCT="$2"; shift 2 ;;
         --soft)  SOFT="$2"; shift 2 ;;
         --hard)  HARD="$2"; shift 2 ;;
+        --phase) PHASE="$2"; shift 2 ;;
+        --base-ref) BASE_REF="$2"; shift 2 ;;
         --store) STORE_DIR="$2"; shift 2 ;;
         --keep-criterion) KEEP=1; shift ;;
         *) echo "unknown arg $1" >&2; exit 2 ;;
     esac
 done
 
+case "$PHASE" in
+    all|baseline|gate) ;;
+    *) echo "e2e: --phase must be all|baseline|gate (got '$PHASE')" >&2; exit 2 ;;
+esac
+
 command -v cargo >/dev/null 2>&1 || { echo "e2e: cargo not on PATH" >&2; exit 2; }
 command -v jq    >/dev/null 2>&1 || { echo "e2e: jq not on PATH" >&2; exit 2; }
 
 FILTER='^cascade_strategies/(uniform|bimodal)/256/'
-echo "e2e: injecting a self-calibrating ~${PCT}% regression (soft=${SOFT}% hard=${HARD}%)"
+BASE_FILE="$STORE_DIR/refs/heads/${BASE_REF}.json"
 
-# ── Run 1: clean baseline ──────────────────────────────────────────────────
-if [[ "$KEEP" -eq 0 ]]; then
-    rm -rf target/criterion
-    echo "e2e: run 1/2 — clean baseline"
-    if ! timeout 900 cargo bench -p consortium-fanout-sim --bench cascade_strategies -- \
-            "$FILTER" --quick >/tmp/perf-e2e-clean.log 2>&1; then
-        echo "e2e: clean bench run failed" >&2
-        tail -n 40 /tmp/perf-e2e-clean.log >&2
-        exit 1
+run_bench() {
+    local label="$1" pct="$2"
+    echo "e2e: cargo bench ($label) — timeout ${BENCH_TIMEOUT}s"
+    if [[ -n "$pct" ]]; then
+        CONSORTIUM_PERF_REGRESSION_PCT="$pct" timeout "$BENCH_TIMEOUT" \
+            cargo bench -p consortium-fanout-sim --bench cascade_strategies -- \
+                "$FILTER" --quick >"/tmp/perf-e2e-$label.log" 2>&1
+    else
+        timeout "$BENCH_TIMEOUT" \
+            cargo bench -p consortium-fanout-sim --bench cascade_strategies -- \
+                "$FILTER" --quick >"/tmp/perf-e2e-$label.log" 2>&1
     fi
-else
-    echo "e2e: run 1/2 — reusing existing target/criterion (--keep-criterion)"
+    local rc=$?
+    if [[ $rc -ne 0 ]]; then
+        echo "e2e: $label bench run failed (exit $rc)" >&2
+        tail -n 40 "/tmp/perf-e2e-$label.log" >&2
+        return 1
+    fi
+    return 0
+}
+
+# ── Phase: baseline ─────────────────────────────────────────────────────────
+if [[ "$PHASE" == all || "$PHASE" == baseline ]]; then
+    echo "e2e: phase baseline — capturing a clean reference for $BASE_REF"
+    if [[ "$KEEP" -eq 0 ]]; then
+        rm -rf target/criterion
+        run_bench clean "" || exit 1
+    else
+        echo "e2e:   reusing existing target/criterion (--keep-criterion)"
+    fi
+
+    bash "$BASELINE_SH" store --ref "$BASE_REF" --sha "$(git rev-parse HEAD)" \
+        --notes "e2e clean run" --est target/criterion --dir "$STORE_DIR" >/dev/null \
+        || { echo "e2e: could not store baseline" >&2; exit 1; }
+    echo "e2e: baseline -> $BASE_FILE"
+    [[ -f "$BASE_FILE" ]] || { echo "e2e: baseline file missing after store" >&2; exit 1; }
+    echo "e2e: phase baseline OK — now run: bash $(basename "$0") --phase gate"
 fi
 
-BASE_REF="e2e-baseline"
-bash "$BASELINE_SH" store --ref "$BASE_REF" --sha "$(git rev-parse HEAD)" \
-    --notes "e2e clean run" --est target/criterion --dir "$STORE_DIR" >/dev/null \
-    || { echo "e2e: could not store baseline" >&2; exit 1; }
-BASE_FILE="$STORE_DIR/refs/heads/${BASE_REF}.json"
-echo "e2e: baseline -> $BASE_FILE"
+if [[ "$PHASE" == baseline ]]; then
+    echo "e2e: PASS (phase baseline complete; gate verdict not yet evaluated)"
+    exit 0
+fi
 
-# ── Run 2: regressed ───────────────────────────────────────────────────────
-echo "e2e: run 2/2 — regressed"
-rm -rf target/criterion
-if ! CONSORTIUM_PERF_REGRESSION_PCT="$PCT" timeout 900 \
-     cargo bench -p consortium-fanout-sim --bench cascade_strategies -- \
-        "$FILTER" --quick >/tmp/perf-e2e-regressed.log 2>&1; then
-    echo "e2e: regressed bench run failed" >&2
-    tail -n 40 /tmp/perf-e2e-regressed.log >&2
+# ── Phase: gate ─────────────────────────────────────────────────────────────
+if [[ ! -f "$BASE_FILE" ]]; then
+    echo "e2e: no baseline at $BASE_FILE" >&2
+    echo "  run 'bash $(basename "$0") --phase baseline' first" >&2
     exit 1
+fi
+
+echo
+echo "e2e: phase gate — injecting a self-calibrating ~${PCT}% regression (soft=${SOFT}% hard=${HARD}%)"
+if [[ "$KEEP" -eq 0 ]]; then
+    rm -rf target/criterion
+    run_bench regressed "$PCT" || exit 1
+else
+    echo "e2e:   reusing existing target/criterion (--keep-criterion)"
 fi
 
 # ── Gate ───────────────────────────────────────────────────────────────────

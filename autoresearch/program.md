@@ -92,6 +92,18 @@ For each task file:
    - For tasks touching the Python oracle (`lib/`, `tests/` in the
      consortium-tests repo): `pytest tests/ -v --timeout=30 -x` run
      from `$CONSORTIUM_TESTS_DIR`
+   - **perf regression** (every task type, not just `perf-*`): the
+     cascade bench must stay within tolerance of the stored master
+     perf baseline — ≥ the soft threshold (5% by default) is reported
+     as a warning and still passes, at or above the hard threshold
+     (10%) the task is rejected. This is the "≥ master perf baseline
+     within tolerance" counterpart to the test-count rule above: a
+     refactor that quietly makes the solver slower passes every other
+     gate here. See `autoresearch/scripts/perf-gate.sh` and
+     `autoresearch/perf-baselines/`. Override with
+     `AR_PERF_SOFT_PCT` / `AR_PERF_HARD_PCT`; set
+     `AR_SKIP_PERF_GATE=1` to bypass (bench unavailable, or a task
+     that is deliberately changing bench numbers).
 6. **If green**, commit with a single conventional-commit message,
    `git push -u origin "$AR_BRANCH"` if the remote exists, and exit 0.
    The orchestrator will open the PR.
