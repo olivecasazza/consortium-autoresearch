@@ -12,6 +12,7 @@ use crate::executor::DeterministicExecutor;
 use crate::fixtures::{
     rng_from_seed, BandwidthDistribution, FailureSchedule, SeedDistribution, UplinkDistribution,
 };
+use crate::link::LinkModel;
 
 /// Everything needed to build a reproducible cascade run.
 ///
@@ -72,6 +73,21 @@ impl Scenario {
 
     /// Run the cascade with the given strategy. Deterministic in `cfg.seed`.
     pub fn run(&self, strategy: &dyn CascadeStrategy) -> CascadeResult {
+        self.run_with_link(strategy, LinkModel::new())
+    }
+
+    /// Run the cascade with a custom [`LinkModel`].
+    ///
+    /// [`Self::run`] is exactly this with a lossless, zero-jitter
+    /// model. Pass a model with [`PacketLoss`] and jitter to price a
+    /// lossy, noisy fabric. The link model only affects edge
+    /// *durations*; failure decisions still come from
+    /// `cfg.failures` and `NetworkProfile::partitions`.
+    pub fn run_with_link(
+        &self,
+        strategy: &dyn CascadeStrategy,
+        link: LinkModel,
+    ) -> CascadeResult {
         let mut rng = rng_from_seed(self.cfg.seed);
 
         let mut alloc = NodeIdAlloc::new();
@@ -99,7 +115,9 @@ impl Scenario {
             uplinks.populate(&mut rng, &mut net, self.cfg.n_nodes);
         }
 
-        let exec = DeterministicExecutor::new(self.cfg.closure_bytes, self.cfg.failures.clone());
+        let exec = DeterministicExecutor::new(self.cfg.closure_bytes, self.cfg.failures.clone())
+            .with_link_model(link)
+            .with_seed(self.cfg.seed);
 
         run_cascade(
             nodes,

@@ -42,10 +42,14 @@
 //! assert_eq!(result.converged.len(), 64);
 //! ```
 
+pub mod dag_sim;
 pub mod executor;
 pub mod fixtures;
+pub mod link;
 pub mod scenario;
 
+pub use dag_sim::{DagSimReport, DeployDagSim, DeployStage, StageSchedule, StageTiming};
 pub use executor::DeterministicExecutor;
 pub use fixtures::{BandwidthDistribution, FailureSchedule, SeedDistribution, UplinkDistribution};
+pub use link::{Jitter, LinkDirection, LinkModel, PacketLoss};
 pub use scenario::{Scenario, ScenarioConfig};

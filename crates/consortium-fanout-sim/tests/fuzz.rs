@@ -137,8 +137,16 @@ proptest! {
         // dependency cleanly, so we sample manually.
         let failure_kind: u8 = frng.gen_range(0u8..=2);
         let killed_node: Option<NodeId> = None;
+        // Draw from 1..n_nodes, skipping node 0. Node 0 is the
+        // pre-seeded node: it already holds the closure, so no cascade
+        // edge ever targets it and `KillNodeAtRound{node: 0}` matches
+        // nothing. The round-0 assertion below ("a node killed at round
+        // 0 can never be in the converged set") is therefore false for
+        // the seed, and drawing it made this property fail on ~95% of
+        // runs. See `scale_failures::killing_the_seed_is_harmless_
+        // because_seeds_are_already_converged`.
         let killed_node = match failure_kind {
-            1 => Some(NodeId(frng.gen_range(0..n_nodes))),
+            1 => Some(NodeId(frng.gen_range(1..n_nodes))),
             _ => killed_node,
         };
         let failures = match failure_kind {
@@ -214,10 +222,11 @@ proptest! {
         }
 
         // Tightened: when KillNodeAtRound was injected with round=0,
-        // the killed node MUST appear in the failure tree (it can never
-        // receive the closure since every attempt to copy to it fails
-        // from round 0). Older test was silent about this — would have
-        // passed even if the kill schedule was being ignored.
+        // the killed node MUST appear in the failure tree. The node is
+        // never the seed (see the draw above), so every attempt to copy
+        // to it really does fail from round 0. Older test was silent
+        // about this — would have passed even if the kill schedule was
+        // being ignored.
         if let Some(killed) = killed_node {
             // Only assert when the kill could actually have fired:
             // round 0 means it fires on first attempt regardless of
