@@ -48,6 +48,22 @@ done
 # feat/foo -> feat__foo, keeping the mapping reversible and readable.
 sanitize() { printf '%s' "${1//\//__}"; }
 
+# Canonicalize a ref to its fully-qualified form.
+#
+# GitHub hands out two shapes for the same branch: github.ref is a full ref
+# (refs/heads/feat/foo) while github.base_ref is a short name (feat/foo). The
+# store side and the resolve side must land on the *same* file, so normalize
+# before sanitizing -- otherwise the file is written as
+# refs__heads__feat__foo.json and looked up as feat__foo.json, and the gate
+# silently resolves nothing and SKIPs. A short name is a branch name; anything
+# already namespaced (refs/tags/...) is left alone.
+normalize_ref() {
+    case "$1" in
+        refs/*) printf '%s' "$1" ;;
+        *)      printf 'refs/heads/%s' "$1" ;;
+    esac
+}
+
 classify() {
     case "$1" in
         refs/tags/*) printf 'tags' ;;
@@ -56,7 +72,7 @@ classify() {
 }
 
 rel_path() {
-    local ref="$1"
+    local ref; ref="$(normalize_ref "$1")"
     printf '%s/refs/%s/%s.json' "$DIR" "$(classify "$ref")" "$(sanitize "$ref")"
 }
 
@@ -66,7 +82,8 @@ cmd_store() {
     [[ -d "$EST" ]] || { echo "perf-baseline: --est $EST is not a directory" >&2; exit 2; }
     command -v jq >/dev/null 2>&1 || { echo "perf-baseline: jq required" >&2; exit 2; }
 
-    local out; out="$(rel_path "$REF")"
+    local canon; canon="$(normalize_ref "$REF")"
+    local out; out="$(rel_path "$canon")"
     mkdir -p "$(dirname "$out")"
 
     local metrics; metrics=$(mktemp)
@@ -102,8 +119,8 @@ cmd_store() {
     # name<TAB>ns and become a JSON object. Emitting the envelope by hand and
     # splicing the object in is how you end up shipping invalid JSON to a gate
     # that must not fail on parsing.
-    jq -Rn --arg ref "$REF" \
-          --arg ref_type "$(classify "$REF")" \
+    jq -Rn --arg ref "$canon" \
+          --arg ref_type "$(classify "$canon")" \
           --arg sha "${SHA:-$(git rev-parse HEAD 2>/dev/null || echo unknown)}" \
           --arg measured_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
           --arg host "$(uname -srm)" \
