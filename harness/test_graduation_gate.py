@@ -12,6 +12,7 @@ carries no information.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import textwrap
@@ -104,6 +105,11 @@ def run_gate(
         capture_output=True,
         text=True,
         cwd=REPO_ROOT,
+        # These self-tests run in CI, in the same job and environment as the
+        # real gate step. Without scrubbing, every one of them would append a
+        # bogus `graduation_gate=` output and step-summary table, and the real
+        # signal would arrive buried in synthetic ones.
+        env={k: v for k, v in os.environ.items() if k not in ("GITHUB_OUTPUT", "GITHUB_STEP_SUMMARY")},
     )
     report = json.loads(json_out.read_text()) if json_out.exists() else {}
     return proc.returncode, proc.stdout + proc.stderr, report
@@ -484,3 +490,66 @@ def test_the_verdict_is_the_first_line_and_carries_the_numbers(tmp_path):
     assert first.startswith("GRADUATION GATE: FAIL")
     assert "coverage=" in first and "required 80%" in first
     assert "covered=1/4" in first
+
+
+# ── CI output channels ───────────────────────────────────────────────────
+
+
+def test_the_gate_publishes_a_boolean_for_ci(tmp_path, monkeypatch):
+    gh_out = tmp_path / "gh_output"
+    gh_sum = tmp_path / "gh_summary"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(gh_out))
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(gh_sum))
+
+    py_classes = {**ALL_GREEN, "UnrelatedTest": ["test_d", "test_e"]}
+    write_upstream(py_classes, tmp_path)
+    (tmp_path / "TEST_MAPPING.toml").write_text(MAPPED_ALL)
+    (tmp_path / "results").mkdir(exist_ok=True)
+    (tmp_path / "results" / "rust-unit.xml").write_text(
+        rust_junit(["task::tests::test_a", "task::tests::test_b", "tree::tests::test_c",
+                    "misc::tests::test_d", "misc::tests::test_e"])
+    )
+    py = py_all_pass(py_classes)
+    (tmp_path / "results" / "python-original.xml").write_text(py)
+    (tmp_path / "results" / "python-rust.xml").write_text(py)
+    (tmp_path / "graduation-gate.toml").write_text(CONFIG)
+    (tmp_path / "graduation-exemptions.toml").write_text(EXEMPTIONS_HEADER)
+
+    proc = subprocess.run(
+        [sys.executable, str(GATE),
+         "--mapping", str(tmp_path / "TEST_MAPPING.toml"),
+         "--tests-dir", str(tmp_path / "tests"),
+         "--results-dir", str(tmp_path / "results"),
+         "--config", str(tmp_path / "graduation-gate.toml"),
+         "--exemptions", str(tmp_path / "graduation-exemptions.toml")],
+        capture_output=True, text=True, cwd=REPO_ROOT,
+    )
+    assert proc.returncode == 0, proc.stdout
+
+    published = dict(
+        line.split("=", 1) for line in gh_out.read_text().splitlines() if "=" in line
+    )
+    assert published["graduation_gate"] == "PASS"
+    assert published["covered"] == "5"
+    assert "CON-4 graduation gate: PASS" in gh_sum.read_text()
+
+
+def test_the_self_tests_do_not_write_to_the_ci_output_channels(tmp_path, monkeypatch):
+    """These tests run in the same job, and therefore the same environment, as
+    the real gate step. If they inherited GITHUB_OUTPUT the step would publish
+    a `graduation_gate=` line per synthetic case, and the real signal would be
+    indistinguishable from the noise around it."""
+    gh_out = tmp_path / "gh_output"
+    gh_sum = tmp_path / "gh_summary"
+    gh_out.write_text("")
+    gh_sum.write_text("")
+    monkeypatch.setenv("GITHUB_OUTPUT", str(gh_out))
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(gh_sum))
+
+    write_upstream(ALL_GREEN, tmp_path)
+    rust = rust_junit(["task::tests::test_a"])
+    py = junit([("tests.TaskFooTest", "test_a", "pass")])
+    run_gate(tmp_path, mapping=MAPPED, rust_unit=rust, python_original=py, python_rust=py)
+
+    assert gh_out.read_text() == ""
+    assert gh_sum.read_text() == ""
