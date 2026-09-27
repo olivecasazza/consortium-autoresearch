@@ -7,11 +7,13 @@
 use consortium_nix::cascade::{
     run_cascade, CascadeNode, CascadeResult, CascadeStrategy, NetworkProfile, NodeIdAlloc,
 };
+use consortium_nix::cascade_trace::{CascadeTrace, TraceRecorder};
 
 use crate::executor::DeterministicExecutor;
 use crate::fixtures::{
     rng_from_seed, BandwidthDistribution, FailureSchedule, SeedDistribution, UplinkDistribution,
 };
+use crate::link::LinkModel;
 
 /// Everything needed to build a reproducible cascade run.
 ///
@@ -72,6 +74,50 @@ impl Scenario {
 
     /// Run the cascade with the given strategy. Deterministic in `cfg.seed`.
     pub fn run(&self, strategy: &dyn CascadeStrategy) -> CascadeResult {
+        self.run_with_link(strategy, LinkModel::new())
+    }
+
+    /// Run the cascade, collecting a per-round trace into `rec`.
+    ///
+    /// Same result as [`Self::run`] — the sink is observational only — but
+    /// the recorder retains the per-edge outcomes and parent chain that
+    /// [`crate::report::RunReport::from_cascade`] needs to derive
+    /// fan-out depth, per-edge throughput and convergence times.
+    pub fn run_traced(
+        &self,
+        strategy: &dyn CascadeStrategy,
+        rec: &TraceRecorder,
+    ) -> (CascadeResult, CascadeTrace) {
+        self.dispatch(strategy, LinkModel::new(), Some(rec))
+    }
+
+    /// [`Self::run_traced`] with a custom [`LinkModel`].
+    pub fn run_with_link_traced(
+        &self,
+        strategy: &dyn CascadeStrategy,
+        link: LinkModel,
+        rec: &TraceRecorder,
+    ) -> (CascadeResult, CascadeTrace) {
+        self.dispatch(strategy, link, Some(rec))
+    }
+
+    /// Run the cascade with a custom [`LinkModel`].
+    ///
+    /// [`Self::run`] is exactly this with a lossless, zero-jitter
+    /// model. Pass a model with [`PacketLoss`] and jitter to price a
+    /// lossy, noisy fabric. The link model only affects edge
+    /// *durations*; failure decisions still come from
+    /// `cfg.failures` and `NetworkProfile::partitions`.
+    pub fn run_with_link(&self, strategy: &dyn CascadeStrategy, link: LinkModel) -> CascadeResult {
+        self.dispatch(strategy, link, None).0
+    }
+
+    fn dispatch(
+        &self,
+        strategy: &dyn CascadeStrategy,
+        link: LinkModel,
+        rec: Option<&TraceRecorder>,
+    ) -> (CascadeResult, CascadeTrace) {
         let mut rng = rng_from_seed(self.cfg.seed);
 
         let mut alloc = NodeIdAlloc::new();
@@ -99,17 +145,32 @@ impl Scenario {
             uplinks.populate(&mut rng, &mut net, self.cfg.n_nodes);
         }
 
-        let exec = DeterministicExecutor::new(self.cfg.closure_bytes, self.cfg.failures.clone());
+        let exec = DeterministicExecutor::new(self.cfg.closure_bytes, self.cfg.failures.clone())
+            .with_link_model(link)
+            .with_seed(self.cfg.seed);
 
-        run_cascade(
+        let result = run_cascade(
             nodes,
             seeded,
             net,
             strategy,
             &exec,
             self.cfg.max_rounds,
-            None,
-        )
+            rec.map(|r| r as &dyn consortium_nix::cascade::TraceSink),
+        );
+
+        let trace = CascadeTrace::from_recorder(
+            strategy.name(),
+            self.cfg.n_nodes,
+            rec.unwrap_or_else(|| {
+                // A run without a sink still needs a trace object to hand
+                // back; an empty recorder yields an empty, valid trace.
+                static EMPTY: std::sync::OnceLock<TraceRecorder> = std::sync::OnceLock::new();
+                EMPTY.get_or_init(TraceRecorder::new)
+            }),
+        );
+
+        (result, trace)
     }
 
     pub fn config(&self) -> &ScenarioConfig {
