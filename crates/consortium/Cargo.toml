@@ -1,12 +1,20 @@
 [package]
 name = "consortium-crate"
-# Internal crates and code still use `consortium` as the lib name
-lib.name = "consortium"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Core library — Rust implementation of ClusterShell"
+
+# CON-97: `lib.name` was under `[package]`, where cargo ignores it (it warns
+# `unused manifest key: package.lib`), so the lib target was really named
+# `consortium_crate` and every `use consortium::…` in tests/docker_integration.rs
+# and tests/tool_integration.rs failed with `unresolved module or unlinked crate
+# `consortium``. Those two test targets could not compile, so the docker- and
+# tool-integration gates could only ever report a compile error. Declared where
+# cargo reads it, which is what the original comment above it always intended.
+[lib]
+name = "consortium"
 
 [dependencies]
 thiserror.workspace = true
