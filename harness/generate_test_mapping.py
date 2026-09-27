@@ -58,7 +58,7 @@ def scan_rust_tests() -> list[str]:
     """Run `cargo test -- --list` and extract all test names."""
     try:
         proc = subprocess.run(
-            ["cargo", "test", "-p", "consortium", "--", "--list"],
+            ["cargo", "test", "-p", "consortium-crate", "--", "--list"],
             capture_output=True,
             text=True,
             cwd=str(REPO_ROOT),

@@ -90,14 +90,16 @@ def main():
         if nextest_available:
             rc = run_cmd([
                 "cargo", "nextest", "run",
-                "-p", "consortium",
+                "-p", "consortium-crate",
                 "--profile", "ci",
                 f"--junit-xml={results_dir}/rust-unit.xml",
             ])
         else:
             # cargo test doesn't natively output JUnit, so we parse its output
             proc = subprocess.run(
-                ["cargo", "test", "-p", "consortium", "--", "--format=terse"],
+                # No --format flag: the JUnit generator below parses the default
+                # per-test "test <name> ... ok" lines, which terse mode suppresses.
+                ["cargo", "test", "-p", "consortium-crate"],
                 capture_output=True, text=True, cwd=str(REPO_ROOT),
             )
             rc = proc.returncode

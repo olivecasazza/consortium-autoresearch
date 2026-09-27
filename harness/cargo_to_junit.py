@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-"""cargo_to_junit.py — convert `cargo test -- --format=terse` output to JUnit XML.
+"""cargo_to_junit.py — convert `cargo test` output to JUnit XML.
 
 Reads from stdin, writes JUnit XML to stdout.
 
+Requires the default (non-terse) libtest output, which prints one
+`test <name> ... <status>` line per test. `--format=terse` suppresses those
+lines and yields an empty suite.
+
 Usage:
-    cargo test -p consortium -- --format=terse 2>&1 | python harness/cargo_to_junit.py
+    cargo test -p consortium-crate 2>&1 | python harness/cargo_to_junit.py
 """
 import sys
 import xml.etree.ElementTree as ET
