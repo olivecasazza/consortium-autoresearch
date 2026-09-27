@@ -12,6 +12,7 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 GATE="$HERE/perf-gate.sh"
+BASELINE="$HERE/perf-baseline.sh"
 TMP=$(mktemp -d -t perf-gate-test.XXXXXX)
 trap 'rm -f "$TMP"/perf-gate-table.*; rm -rf "$TMP"' EXIT
 
@@ -135,6 +136,55 @@ if printf '%s' "$OUT" | grep -q 'baseline missing'; then
 else
     printf 'FAIL %-46s not surfaced\n' "unbaselined-metric-surfaced"
     printf '%s\n' "$OUT" | sed 's/^/       | /'; FAIL=$((FAIL + 1))
+fi
+
+# The store side is handed github.ref (refs/heads/<name>) and the gate side is
+# handed github.base_ref (<name>). If those two spellings disagree, the baseline
+# is written to one file and looked up in another, the gate finds nothing, and
+# it SKIPs green — the exact failure the CI job hit.
+echo "# baseline ref resolution (short name vs full ref)"
+BST="$TMP/store-tree"; rm -rf "$BST"; mkdir -p "$BST"
+mk_tree "$BST" perf_cascade.bimodal_256.log2-fanout 1000000
+BDIR="$TMP/blstore"; rm -rf "$BDIR"; mkdir -p "$BDIR"
+BRANCH="feat/con-104/ref-shape"
+
+# store writes the document to stdout and the path it used to stderr.
+store_path() {
+    bash "$BASELINE" store --ref "$2" --dir "$1" --est "$3" --sha deadbeef 2>&1 >/dev/null \
+        | sed -n 's/.* -> \(.*\)$/\1/p'
+}
+
+RESOLVED=; STORED=$(store_path "$BDIR" "refs/heads/$BRANCH" "$BST")
+RESOLVED=$(bash "$BASELINE" resolve --dir "$BDIR" --ref "$BRANCH" 2>/dev/null)
+if [[ -n "$STORED" && "$STORED" == "$RESOLVED" ]]; then
+    printf 'ok   %-46s %s\n' "store-full-ref-resolves-by-short-name" "${STORED##*/}"
+    PASS=$((PASS + 1))
+else
+    printf 'FAIL %-46s stored=%s resolved=%s\n' \
+        "store-full-ref-resolves-by-short-name" "${STORED:-none}" "${RESOLVED:-none}"
+    FAIL=$((FAIL + 1))
+fi
+
+# The reverse direction must land on the same file too, or re-measuring from a
+# short ref name would silently fork the baseline.
+STORED2=$(store_path "$BDIR" "$BRANCH" "$BST")
+if [[ "$STORED2" == "$RESOLVED" ]]; then
+    printf 'ok   %-46s %s\n' "store-short-name-resolves-by-full-ref" "${STORED2##*/}"
+    PASS=$((PASS + 1))
+else
+    printf 'FAIL %-46s stored=%s resolved=%s\n' \
+        "store-short-name-resolves-by-full-ref" "${STORED2:-none}" "${RESOLVED:-none}"
+    FAIL=$((FAIL + 1))
+fi
+
+# A tag ref must stay in the tags/ namespace rather than being read as a branch.
+TSTORED=$(store_path "$BDIR" refs/tags/v1.2.3 "$BST")
+if [[ "$TSTORED" == "$BDIR/refs/tags/refs__tags__v1.2.3.json" ]]; then
+    printf 'ok   %-46s %s\n' "tag-ref-stays-in-tags-namespace" "${TSTORED##*/}"
+    PASS=$((PASS + 1))
+else
+    printf 'FAIL %-46s %s\n' "tag-ref-stays-in-tags-namespace" "${TSTORED:-none}"
+    FAIL=$((FAIL + 1))
 fi
 
 echo
