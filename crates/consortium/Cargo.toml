@@ -1,12 +1,17 @@
 [package]
 name = "consortium-crate"
-# Internal crates and code still use `consortium` as the lib name
-lib.name = "consortium"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Core library — Rust implementation of ClusterShell"
+
+# Internal crates and code still use `consortium` as the lib name.
+# This must be a [lib] table, not a key inside [package]: cargo ignores
+# `package.lib`, which leaves the target named `consortium_crate` and makes
+# the `use consortium::` doctests fail to resolve.
+[lib]
+name = "consortium"
 
 [dependencies]
 thiserror.workspace = true
