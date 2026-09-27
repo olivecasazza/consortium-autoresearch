@@ -43,6 +43,10 @@ yarn.lock
 test_ini.rs
 results/
 
+# Scratch dir for harness/scorecard_guard.py's self-test. It cleans up after
+# itself, but a killed run should not leave a tree behind.
+scorecard-guard-probe-*/
+
 # Docker test artifacts
 tests/docker/ssh/
 tests/docker/docker-compose.generated.yml
