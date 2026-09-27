@@ -25,8 +25,14 @@ use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 
 /// Deliberate slowdown used by the perf-gate acceptance test.
 ///
-/// Reads `CONSORTIUM_PERF_REGRESSION_PCT` (default `0`, i.e. off) and burns
-/// that percentage of the measured wall time in a black-boxed spin loop. It is
+/// **ACCEPTANCE TEST ARTEFACT — DO NOT MERGE.** The default below is flipped
+/// from `0` to `10` so that CI has a real ~10% regression to catch. It exists
+/// only to prove the gate goes red on a test PR (CON-104) and is reverted by
+/// closing this PR.
+///
+/// Reads `CONSORTIUM_PERF_REGRESSION_PCT` and burns that percentage of the
+/// measured wall time in a black-boxed spin loop. It is
+
 /// *self-calibrating* — the delay scales with how long the scenario actually
 /// took — so a "10% regression" is 10% on any host, CI runner included, rather
 /// than a fixed number of iterations that would mean something different on
@@ -38,7 +44,7 @@ fn burn_regression_pct(elapsed: std::time::Duration) {
     let pct: f64 = std::env::var("CONSORTIUM_PERF_REGRESSION_PCT")
         .ok()
         .and_then(|v| v.parse().ok())
-        .unwrap_or(0.0);
+        .unwrap_or(10.0);
     if pct <= 0.0 {
         return;
     }
