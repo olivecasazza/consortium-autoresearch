@@ -25,7 +25,7 @@ use consortium_fanout_sim::{
     fixtures::FailureSchedule,
     scenario::{Scenario, ScenarioConfig},
 };
-use consortium_nix::cascade::{CascadeStrategy, NodeId};
+use consortium_nix::cascade::NodeId;
 use consortium_nix::cascade_strategies::LevelTreeFanOut;
 
 #[test]

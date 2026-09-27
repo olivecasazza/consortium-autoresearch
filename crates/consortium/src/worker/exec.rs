@@ -710,7 +710,7 @@ mod tests {
             fn on_read(&mut self, node: &str, _fd: RawFd, msg: &[u8]) {
                 let mut map = self.collected.lock().unwrap();
                 map.entry(node.to_string())
-                    .or_insert_with(Vec::new)
+                    .or_default()
                     .extend_from_slice(msg);
             }
 

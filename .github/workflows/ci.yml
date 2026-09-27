@@ -109,9 +109,23 @@ jobs:
           retention-days: 30
 
       # CON-97: `continue-on-error` removed. clippy is a lint gate, not a test
-      # step, and it is already green — verified on runs 32534376596 (master)
-      # and 36076732386 (ci/buildbot-checks), where the step conclusion is
-      # `success`. The guard was protecting nothing, so it came off.
+      # step, so the guard came off.
+      #
+      # CON-220: the greenness that justified removing it was measured on
+      # runs 32534376596 (master) and 36076732386 (ci/buildbot-checks), both
+      # of which resolved `dtolnay/rust-toolchain@stable` to whatever stable
+      # was that day. They predate e9a0bb9, which made this job honour the
+      # `rust-toolchain.toml` pin (1.94.1). So the step never ran under the
+      # pin before CON-220: it reported `skipped` on every run since, because
+      # Actions stops a job at its first failing step and the `nextest` step
+      # above was red. PR #26 turned that step green and the clippy step
+      # immediately failed with 19 errors in `consortium-crate`; 13 more in
+      # `consortium-cli` are only visible with `--all-targets`. CON-220 fixed
+      # all 32 without an `#[allow]`, a `clippy.toml`, or a `-A` flag.
+      #
+      # Do not re-assert greenness from a run that predates the pin. Read the
+      # step conclusion on a run whose log shows
+      # `rustup toolchain install 1.94.1`.
       - name: Run clippy
         run: cargo clippy --workspace -- -D warnings
 

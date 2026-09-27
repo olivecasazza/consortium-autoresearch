@@ -35,7 +35,7 @@ fn bandwidth_strategy() -> impl Strategy<Value = BandwidthDistribution> {
         (10u64 * 1024 * 1024..1024 * 1024 * 1024).prop_map(BandwidthDistribution::Uniform),
         // Bimodal: slow << fast, fast_fraction varies
         (
-            1u64 * 1024 * 1024..50 * 1024 * 1024,
+            1024u64 * 1024..50 * 1024 * 1024,
             100u64 * 1024 * 1024..2 * 1024 * 1024 * 1024,
             0.05f64..0.95,
         )
@@ -226,7 +226,7 @@ proptest! {
             // We check the schedule's round via re-extraction:
             if let FailureSchedule::KillNodeAtRound { round: 0, .. } = cfg.failures {
                 prop_assert!(
-                    !result.converged.iter().any(|&n| n == killed),
+                    !result.converged.contains(&killed),
                     "[{}] killed node {killed:?} still appears in converged set: {:?}",
                     strategy.name(),
                     result.converged,

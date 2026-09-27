@@ -36,6 +36,7 @@ fn bench_uniform_256(c: &mut Criterion) {
         seed_fraction: 0.0,
         closure_bytes: 50 * 1024 * 1024,
         bandwidth: BandwidthDistribution::Uniform(100 * 1024 * 1024),
+        uplinks: None,
         failures: FailureSchedule::None,
         max_rounds: 32,
     };
@@ -60,6 +61,7 @@ fn bench_bimodal_256(c: &mut Criterion) {
             fast: 1024 * 1024 * 1024,
             fast_fraction: 0.3,
         },
+        uplinks: None,
         failures: FailureSchedule::None,
         max_rounds: 32,
     };
@@ -84,6 +86,7 @@ fn bench_bimodal_512(c: &mut Criterion) {
             fast: 1024 * 1024 * 1024,
             fast_fraction: 0.3,
         },
+        uplinks: None,
         failures: FailureSchedule::None,
         max_rounds: 32,
     };

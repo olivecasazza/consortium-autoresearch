@@ -309,8 +309,7 @@ impl TimerQueue {
     ///
     /// Returns the TimerId for the new timer
     pub fn add_timer(&mut self, timer: EngineBaseTimer) -> TimerId {
-        let timer_id = self.timer_data.insert(timer);
-        timer_id
+        self.timer_data.insert(timer)
     }
 
     /// Remove a timer by ID
