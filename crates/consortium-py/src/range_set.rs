@@ -136,5 +136,13 @@ impl RangeSetIterator {
 /// Register range_set types into the parent module.
 pub fn register(parent: &Bound<'_, PyModule>) -> PyResult<()> {
     parent.add_class::<PyRangeSet>()?;
+    // RangeSetParseError is raised by __new__ but was never added to the
+    // module, so `from ClusterShell._consortium import RangeSetParseError`
+    // raised ImportError and the RangeSet shim never loaded. An exception that
+    // cannot be imported is an exception callers cannot catch.
+    parent.add(
+        "RangeSetParseError",
+        parent.py().get_type_bound::<RangeSetParseError>(),
+    )?;
     Ok(())
 }
