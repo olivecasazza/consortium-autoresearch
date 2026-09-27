@@ -266,7 +266,7 @@ fn run(args: Args) -> anyhow::Result<i32> {
 
     if args.maxrc {
         Ok(max_rc.unwrap_or(0))
-    } else if max_rc.map_or(false, |rc| rc != 0) {
+    } else if max_rc.is_some_and(|rc| rc != 0) {
         Ok(1)
     } else {
         Ok(0)
@@ -443,7 +443,7 @@ fn display_dshbak(task: &Task, out: &mut impl Write) -> anyhow::Result<()> {
     for (_rc, nodes) in &retcodes {
         for node in nodes {
             let buf = task.node_buffer(node).unwrap_or_default();
-            let ns = output_to_nodes.entry(buf).or_insert_with(NodeSet::new);
+            let ns = output_to_nodes.entry(buf).or_default();
             let _ = ns.update_str(node);
         }
     }

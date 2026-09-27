@@ -30,7 +30,7 @@ use crate::node_set::NodeSet;
 use crate::propagation::PropagationTreeRouter;
 use crate::topology::TopologyParser;
 use crate::worker::exec::ExecWorker;
-use crate::worker::{EventHandler, Worker, WorkerError, WorkerState};
+use crate::worker::{EventHandler, Worker, WorkerBuffers, WorkerError, WorkerState};
 
 /// Error types for the task module.
 #[derive(Debug, thiserror::Error)]
@@ -157,7 +157,6 @@ impl TaskInfo {
             grooming_delay: 0.5,
             connect_timeout: defaults.connect_timeout(),
             command_timeout: defaults.command_timeout(),
-            ..Default::default()
         }
     }
 }
@@ -172,7 +171,6 @@ fn get_short_hostname() -> String {
     hostname::get()
         .map(|h: std::ffi::OsString| {
             h.to_string_lossy()
-                .to_string()
                 .split('.')
                 .next()
                 .unwrap_or("localhost")
@@ -268,18 +266,12 @@ impl EventHandler for TaskGatheringHandler {
         }
     }
 
-    fn take_buffers(
-        &mut self,
-    ) -> (
-        HashMap<String, Vec<Vec<u8>>>,
-        HashMap<String, Vec<Vec<u8>>>,
-        HashSet<String>,
-    ) {
-        (
-            std::mem::take(&mut self.stdout),
-            std::mem::take(&mut self.stderr),
-            std::mem::take(&mut self.timeouts),
-        )
+    fn take_buffers(&mut self) -> WorkerBuffers {
+        WorkerBuffers {
+            stdout: std::mem::take(&mut self.stdout),
+            stderr: std::mem::take(&mut self.stderr),
+            timeouts: std::mem::take(&mut self.timeouts),
+        }
     }
 }
 
@@ -728,7 +720,7 @@ impl Task {
                     self.d_source_rc.insert(source.clone(), rc);
                     self.d_rc_sources.entry(rc).or_default().insert(source);
 
-                    if self.max_rc.map_or(true, |max| rc > max) {
+                    if self.max_rc.is_none_or(|max| rc > max) {
                         self.max_rc = Some(rc);
                     }
                 }
@@ -738,7 +730,11 @@ impl Task {
             // take_handler() removes the handler from the worker, then we call
             // take_buffers() to drain the collected data into our MsgTrees.
             if let Some(mut handler) = mw.worker.take_handler() {
-                let (stdout, stderr, timeouts) = handler.take_buffers();
+                let WorkerBuffers {
+                    stdout,
+                    stderr,
+                    timeouts,
+                } = handler.take_buffers();
 
                 // Populate stdout MsgTree
                 if let Some(ref mut tree) = self.stdout_tree {
@@ -802,7 +798,7 @@ impl Task {
         for (&rc, sources) in &self.d_rc_sources {
             let nodes: Vec<String> = sources
                 .iter()
-                .filter(|(_, n)| match_keys.map_or(true, |keys| keys.contains(n)))
+                .filter(|(_, n)| match_keys.is_none_or(|keys| keys.contains(n)))
                 .map(|(_, n)| n.clone())
                 .collect();
             if !nodes.is_empty() {
@@ -823,7 +819,7 @@ impl Task {
             let nodes: Vec<String> = sources
                 .iter()
                 .filter(|(wid, n)| {
-                    *wid == worker_id && match_keys.map_or(true, |keys| keys.contains(n))
+                    *wid == worker_id && match_keys.is_none_or(|keys| keys.contains(n))
                 })
                 .map(|(_, n)| n.clone())
                 .collect();
@@ -961,7 +957,7 @@ impl Default for Task {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicBool, AtomicI32, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Arc;
 
     // -- TaskState tests --
@@ -1086,12 +1082,16 @@ mod tests {
 
     #[test]
     fn test_task_with_config() {
-        let mut td = TaskDefaults::default();
-        td.stderr = true;
-        td.stdout_msgtree = false;
+        let td = TaskDefaults {
+            stderr: true,
+            stdout_msgtree: false,
+            ..Default::default()
+        };
 
-        let mut ti = TaskInfo::default();
-        ti.fanout = 32;
+        let ti = TaskInfo {
+            fanout: 32,
+            ..Default::default()
+        };
 
         let task = Task::with_config(td, ti);
         assert!(task.defaults().stderr);
@@ -1208,7 +1208,7 @@ mod tests {
 
         let retcodes = task.iter_retcodes(None);
         // All should be rc=0
-        for (rc, nodes) in &retcodes {
+        for (rc, _nodes) in &retcodes {
             assert_eq!(*rc, 0);
         }
     }
@@ -1370,8 +1370,10 @@ mod tests {
 
     #[test]
     fn test_task_node_buffer_disabled() {
-        let mut td = TaskDefaults::default();
-        td.stdout_msgtree = false;
+        let td = TaskDefaults {
+            stdout_msgtree: false,
+            ..Default::default()
+        };
         let task = Task::with_config(td, TaskInfo::default());
         let result = task.node_buffer("somenode");
         assert!(result.is_err());

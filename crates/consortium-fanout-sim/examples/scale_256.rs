@@ -240,7 +240,10 @@ fn convergence_histogram(events: &[CascadeEvent]) -> Vec<(u32, usize, usize)> {
 
 fn main() {
     const N: u32 = 256;
-    const SEED: u64 = 0x_cafe_babe_256;
+    // 0xcafebabe256. Spelled in decimal because 11 hex digits cannot be
+    // grouped in twos without changing the value, and `clippy::unusual_byte_
+    // groupings` rejects the odd trailing group.
+    const SEED: u64 = 13_949_712_720_470;
 
     println!("=== 256-node cascade, MaxBottleneckSpanning ===");
     println!("Building network profile for {} nodes...", N);
