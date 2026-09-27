@@ -70,17 +70,6 @@ jobs:
             exit 1
           fi
 
-      # Install the rust-toolchain.toml-pinned toolchain before anything
-      # invokes cargo. `maturin develop` was the first cargo caller in
-      # this job, so rustup's deprecated lazy auto-install raced maturin's
-      # own rustup call and the clippy component add lost:
-      #   failed to install component: 'clippy-preview-x86_64-unknown-linux-gnu',
-      #   detected conflict: 'bin/cargo-clippy'
-      # Doing it here — once, up front, single process — means the PyO3
-      # build step finds a complete toolchain already in place.
-      - name: Install pinned toolchain
-        run: rustup install
-
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
 
@@ -324,11 +313,6 @@ jobs:
             echo "::error::CI toolchain (${ACTUAL}) does not match rust-toolchain.toml pin (${PIN})"
             exit 1
           fi
-
-      # See the note in the scorecard job: install the pinned toolchain
-      # explicitly so no cargo step triggers rustup's lazy auto-install.
-      - name: Install pinned toolchain
-        run: rustup install
 
       - name: Cache Rust dependencies
         uses: actions/cache@v4

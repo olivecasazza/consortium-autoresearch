@@ -68,20 +68,6 @@ jobs:
             exit 1
           fi
 
-      # rust-toolchain.toml pins 1.94.1 and lists that toolchain's
-      # components. Left alone, the pinned toolchain is only pulled in by
-      # rustup's lazy auto-install on the first cargo invocation — a path
-      # rustup now deprecates, and one that fails outright when the
-      # component add races:
-      #   failed to install component: 'clippy-preview-x86_64-unknown-linux-gnu',
-      #   detected conflict: 'bin/cargo-clippy'
-      # Install the pinned toolchain once, up front and in a single
-      # process, so no build step can trigger the auto-install. `rustup
-      # install` with no args resolves the rust-toolchain.toml override
-      # and installs exactly the channel + components it declares.
-      - name: Install pinned toolchain
-        run: rustup install
-
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
 
@@ -208,20 +194,6 @@ jobs:
             echo "::error::CI toolchain (${ACTUAL}) does not match rust-toolchain.toml pin (${PIN})"
             exit 1
           fi
-
-      # rust-toolchain.toml pins 1.94.1 and lists that toolchain's
-      # components. Left alone, the pinned toolchain is only pulled in by
-      # rustup's lazy auto-install on the first cargo invocation — a path
-      # rustup now deprecates, and one that fails outright when the
-      # component add races:
-      #   failed to install component: 'clippy-preview-x86_64-unknown-linux-gnu',
-      #   detected conflict: 'bin/cargo-clippy'
-      # Install the pinned toolchain once, up front and in a single
-      # process, so no build step can trigger the auto-install. `rustup
-      # install` with no args resolves the rust-toolchain.toml override
-      # and installs exactly the channel + components it declares.
-      - name: Install pinned toolchain
-        run: rustup install
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
