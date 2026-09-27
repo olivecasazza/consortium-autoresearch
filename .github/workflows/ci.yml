@@ -223,14 +223,32 @@ jobs:
           docker ps -a --filter "name=consortium-test" -q | xargs -r docker rm -f
           docker network ls --filter "name=consortium-test" -q | xargs -r docker network rm
 
-  # ── Layer 2b: Tool Integration Tests (self-hosted, needs Docker + nix) ─
+  # ── Layer 2b: Tool Integration Tests (Docker + nix inside containers) ──
+  # CON-113: this job used `runs-on: nix-builder`, a self-hosted label with
+  # zero runners registered on this repository
+  # (`gh api repos/olivecasazza/consortium-autoresearch/actions/runners` ->
+  # `{"total_count":0}`). A job targeting a label no runner advertises is not
+  # failed, it is *never scheduled*: it sits in `queued` forever and produces no
+  # signal at all. That is a worse defect than a swallowed step, and it hid
+  # here for the entire life of the workflow — the tool-integration suite has
+  # never produced a single CI result. Every requirement this job actually has
+  # (Docker, rustup, ssh-keygen) ships on GitHub-hosted `ubuntu-latest`, and the
+  # nix/ansible nodes it builds are Linux containers, so the self-hosted NixOS
+  # Mac Minis were never load-bearing for it. It now runs where a runner exists.
   tool-integration:
     name: Tool Integration Tests
     needs: unit
-    runs-on: nix-builder
-    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+
+      # CON-113: the self-hosted NixOS runner supplied cargo-nextest from its
+      # `extraPackages`. `ubuntu-latest` does not, and this job has no
+      # nextest-install step, so the next line would have died on
+      # `no such command: cargo nextest`. Install it explicitly.
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
 
       - name: Setup pinned Rust toolchain
         run: |
@@ -255,9 +273,8 @@ jobs:
           echo "rustc --version   : $ACTUAL"
           echo "active toolchain  : $(rustup show active-toolchain 2>/dev/null || echo 'rustup unavailable')"
           if ! echo "$ACTUAL" | grep -q "^rustc ${PIN}"; then
-            echo "::error::self-hosted runner is not using the pinned toolchain (${ACTUAL} != ${PIN})."
-            echo "::error::the NixOS shell is shadowing the rustup shims; pin nixpkgs rust to ${PIN}"
-            echo "::error::or prepend \${CARGO_HOME:-\$HOME/.cargo}/bin to PATH in the runner's extraPackages."
+            echo "::error::runner is not using the pinned toolchain (${ACTUAL} != ${PIN})."
+            echo "::error::the pinned channel from rust-toolchain.toml must be the active one."
             exit 1
           fi
 
@@ -320,21 +337,37 @@ jobs:
         run: |
           RUNNER_HOST=$(cat /etc/hostname 2>/dev/null || hostname 2>/dev/null || echo "$RUNNER_NAME")
           echo "## Tool Integration Tests" >> $GITHUB_STEP_SUMMARY
-          echo "**Runner:** \`${RUNNER_HOST}\` (self-hosted NixOS)" >> $GITHUB_STEP_SUMMARY
+          echo "**Runner:** \`${RUNNER_HOST}\` (GitHub-hosted \`ubuntu-latest\`, Linux/amd64)" >> $GITHUB_STEP_SUMMARY
 
       - name: Cleanup containers
         if: always()
         run: |
           docker ps -a --filter "name=nix-int\|ansible-int" -q | xargs -r docker rm -f
 
-  # ── Layer 3: Nix Integration (self-hosted NixOS Mac Minis) ────────
+  # ── Layer 3: Nix Integration (flake build, GitHub-hosted) ───────────
+  # CON-113: same defect as the two jobs above — `runs-on: nix-builder` with no
+  # such runner, so this job has never executed either. The only reason it
+  # needed a NixOS host was that Nix was preinstalled there; nix installs
+  # cleanly on `ubuntu-latest` in one step, and the flake's `systems` list
+  # already includes `x86_64-linux`, which is what that runner is.
   nix-integration:
-    name: Nix Integration (self-hosted)
+    name: Nix Integration
     needs: [docker-integration, tool-integration]
-    runs-on: nix-builder
-    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+
+      # `magic-nix-cache-action` configures an already-installed nix; it does not
+      # install one. On the NixOS runner nix came from the host, so this is the
+      # step that has to exist now. `extra_nix_config` enables the `nix-command`
+      # and `flakes` features that `nix build .#consortium-cli` requires.
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            accept-flake-config = true
 
       - uses: DeterminateSystems/magic-nix-cache-action@v2
 
@@ -346,26 +379,22 @@ jobs:
           ./result/bin/cast --help
           ./result/bin/claw --help
 
-      # justified-guard: this is a distributed-build *reachability* probe against
-      # self-hosted Nix builders, not a test step and not a build of this repo's
-      # code -- `nix build .#consortium-cli` above is the real build gate and is
-      # unguarded. This step already no-ops when /etc/nix/machines is absent; the
-      # guard covers the case where the machines file exists but the builders are
-      # offline or mid-reboot, which is an infrastructure outage, not a code
-      # regression. Un-swallowing it would make builder flakiness block every PR.
-      - name: Test distributed builds (if builders reachable)
-        continue-on-error: true
-        run: |
-          if [ -f /etc/nix/machines ]; then
-            nix build .#consortium-cli --builders @/etc/nix/machines --max-jobs 0
-          else
-            echo "No machines file, skipping distributed build test"
-          fi
+      # CON-113: the `Test distributed builds (if builders reachable)` step is
+      # deleted rather than re-pointed. It read `/etc/nix/machines` from the
+      # self-hosted host to find the NixOS Mac Minis, and that file only ever
+      # existed because the *job itself* ran on one of them. On `ubuntu-latest`
+      # the step could only ever print "No machines file, skipping" — a step
+      # that can never test anything, the same silent-blindness class as a
+      # swallowed step, so keeping it would have re-created the defect this
+      # issue is about. Those Mac Minis are retired: there are zero self-hosted
+      # runners on this repository and none are being registered by this change.
+      # If a Nix builder fleet comes back, re-add the probe as its own job with
+      # a real fleet to probe — not as a step that silently no-ops.
 
       - name: Generate summary
         if: always()
         run: |
-          echo "## Nix Integration (self-hosted)" >> $GITHUB_STEP_SUMMARY
+          echo "## Nix Integration" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Check | Result |" >> $GITHUB_STEP_SUMMARY
           echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
@@ -374,12 +403,8 @@ jobs:
           else
             echo "| \`nix build .#consortium-cli\` | ❌ |" >> $GITHUB_STEP_SUMMARY
           fi
-          if [ -f /etc/nix/machines ]; then
-            echo "| Distributed builders | ✅ $(wc -l < /etc/nix/machines) builders |" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "| Distributed builders | ⚠️ not configured |" >> $GITHUB_STEP_SUMMARY
-          fi
+          echo "| Distributed builders | retired — no self-hosted fleet (CON-113) |" >> $GITHUB_STEP_SUMMARY
           RUNNER_HOST=$(cat /etc/hostname 2>/dev/null || hostname 2>/dev/null || echo "$RUNNER_NAME")
           NIX_VER=$(nix --version 2>/dev/null || echo "unknown")
-          echo "| Runner | \`${RUNNER_HOST}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Runner | \`${RUNNER_HOST}\` (GitHub-hosted \`ubuntu-latest\`) |" >> $GITHUB_STEP_SUMMARY
           echo "| Nix | \`${NIX_VER}\` |" >> $GITHUB_STEP_SUMMARY

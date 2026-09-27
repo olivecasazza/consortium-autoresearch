@@ -19,6 +19,17 @@ and it is invisible in the job conclusion. Every test step after the first in a
 job must therefore carry an `if:` that survives a sibling failure
 (`!cancelled()` or `always()`).
 
+And the third form, added by CON-113. A step that never *runs* produces no
+signal either, but it fails in the loudest possible non-red way: it is not
+red, it is not skipped, it is absent, and its job sits in `queued` forever. The
+reason is a `runs-on:` label no runner advertises. Until CON-113, `ci.yml`
+targeted the self-hosted label `nix-builder` on two jobs while the repository
+had zero self-hosted runners registered, so `tool-integration` and
+`nix-integration` had never executed a step in their entire life. A bare label
+is therefore rejected: a job must name a GitHub-hosted runner, or declare
+`self-hosted` explicitly so that registering the runner is a deliberate,
+visible act rather than an assumption.
+
 Usage:
     python3 harness/ci/check_test_gates.py [--all] [workflow-dir]
 
@@ -28,10 +39,12 @@ Usage:
                nosetests.yml, which is still fully swallowed upstream
 
 Exit codes:
-    0  every swallow token is justified (or there are none) and every
-       non-first test step in a job is reachable after a sibling failure
+    0  every swallow token is justified (or there are none), every
+       non-first test step in a job is reachable after a sibling failure, and
+       every job targets a runner that can exist
     1  at least one unjustified swallow token, or at least one test step that
-       can only ever be skipped
+       can only ever be skipped, or a job whose `runs-on:` names a label that
+       is neither GitHub-hosted nor explicitly self-hosted
 """
 
 from __future__ import annotations
@@ -86,6 +99,31 @@ STEP_HEADER = re.compile(r"^ {6}- (name|uses|run|id):\s*(.*)$")
 STEP_NAME = re.compile(r"^ {8}name:\s*(.*)$")
 STEP_IF = re.compile(r"^ {8}if:\s*(.*)$")
 CONTINUE_ON_ERROR = re.compile(r"^ {8}continue-on-error:\s*true\s*$")
+JOB_RUNS_ON = re.compile(r"^ {4}runs-on:\s*(.*)$")
+
+# GitHub-hosted runner labels. A job pinned to one of these always has a runner
+# available to it, which is the property this audit is checking for. The list is
+# GitHub's documented set; it is deliberately not a wild card, because a new
+# label added here should be a reviewed decision rather than an accident.
+GITHUB_HOSTED_LABELS = frozenset(
+    {
+        "ubuntu-latest",
+        "ubuntu-24.04",
+        "ubuntu-22.04",
+        "ubuntu-20.04",
+        "macos-latest",
+        "macos-15",
+        "macos-14",
+        "macos-13",
+        "macos-12",
+        "macos-11",
+        "macos-10.15",
+        "windows-latest",
+        "windows-2025",
+        "windows-2022",
+        "windows-2019",
+    }
+)
 
 # Audited by default. `nosetests.yml` is the upstream ClusterShell mirror and is
 # still swallowed end to end; it is tracked by a separate follow-up rather than
@@ -199,6 +237,65 @@ def audit_unreachable_test_steps(path: Path) -> list[str]:
     return problems
 
 
+def audit_unschedulable_jobs(path: Path) -> list[str]:
+    """Flag a job whose `runs-on:` names a label no runner is guaranteed to have.
+
+    GitHub only starts a job when some registered runner advertises a matching
+    label. If none does, the job is not red — it is stuck in `queued` with no
+    conclusion, and it will stay there until the 35-day workflow-run expiry. So
+    an unknown label is worse than a failing test: it silently removes the job
+    from CI without ever making anybody look at it.
+
+    The check accepts two shapes and rejects everything else:
+
+      * a single GitHub-hosted label (`runs-on: ubuntu-latest`)
+      * a bracket list containing `self-hosted` (`runs-on: [self-hosted, linux, x64]`)
+
+    The second shape is the opt-in for a real self-hosted fleet. Writing it out
+    that way is the point: it forces the author to state that a runner exists,
+    instead of leaving the job's schedulability resting on an environment this
+    repository does not control. That is exactly the assumption that made
+    `tool-integration` and `nix-integration` unschedulable for their whole
+    lifetime.
+    """
+    problems: list[str] = []
+    lines = path.read_text(encoding="utf-8").splitlines()
+    job: str | None = None
+    in_jobs = False
+    for number, line in enumerate(lines, start=1):
+        if line.rstrip() == "jobs:":
+            in_jobs = True
+            continue
+        if in_jobs and line and not line.startswith(" "):
+            in_jobs = False
+            continue
+        if not in_jobs:
+            continue
+        if COMMENT_LINE.match(line):
+            continue
+        header = JOB_HEADER.match(line)
+        if header:
+            job = header.group(1)
+            continue
+        runs_on = JOB_RUNS_ON.match(line)
+        if not runs_on or job is None:
+            continue
+        target = runs_on.group(1).strip()
+        if target.startswith("[") and target.endswith("]"):
+            labels = [entry.strip().strip("'\"") for entry in target[1:-1].split(",")]
+        else:
+            labels = [target.strip("'\"")]
+        if any(label in GITHUB_HOSTED_LABELS or label == "self-hosted" for label in labels):
+            continue
+        problems.append(
+            f"{rel(path)}:{number}: job '{job}' targets runs-on {target!r}, which is neither "
+            f"a GitHub-hosted runner nor an explicit [self-hosted, ...] list — with no runner "
+            f"advertising that label the job never starts and reports no result. "
+            f"Use a GitHub-hosted label, or register a runner and write [self-hosted, ...]."
+        )
+    return problems
+
+
 def main(argv: list[str]) -> int:
     args = [a for a in argv[1:] if a != "--all"]
     sweep_all = "--all" in argv[1:]
@@ -225,11 +322,13 @@ def main(argv: list[str]) -> int:
     for path in files:
         problems.extend(audit(path))
         problems.extend(audit_unreachable_test_steps(path))
+        problems.extend(audit_unschedulable_jobs(path))
 
     if problems:
-        print("::error::CI test/failure gates are swallowed or unreachable.")
+        print("::error::CI test/failure gates are swallowed, unreachable, or unschedulable.")
         print("::error::Re-adding a guard requires a `justified-guard:` comment;")
-        print("::error::a test step after another test step needs `if: ${{ !cancelled() }}`.")
+        print("::error::a test step after another test step needs `if: ${{ !cancelled() }}`;")
+        print("::error::a job must target a GitHub-hosted runner or an explicit [self-hosted, ...] list.")
         for problem in problems:
             print(f"::error::{problem}")
         return 1
