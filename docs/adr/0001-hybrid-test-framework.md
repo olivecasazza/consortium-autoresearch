@@ -341,12 +341,20 @@ rubric's §7 Q3 answer — both tiers, in the same scenario — is unimplementab
 
 **Open work on this crate, not a disposition question:**
 
-- `tc netem` shaping in `Dockerfile.ssh-node` — the single highest fidelity-per-day item in the
-  program. It is what makes S4's ±25 % a *fabrication* comparison rather than a loopback one.
+- ~~`tc netem` shaping in `Dockerfile.ssh-node`~~ — **delivered** ([CON-215](/CON/issues/CON-215)).
+  `iproute2` is in the node image, `DockerCluster` exposes `apply_netem` / `clear_netem`, and
+  `docs/testing/container-netem-shaping.md` records the `NetworkProfile` → `netem` mapping —
+  including the part that is not one-to-one, since the sim models per-*edge* bandwidth and a
+  netem qdisc is a per-*node* egress property. The lane asserts the delay and the rate cap in
+  *measured* time, because `tc qdisc replace … netem` with no options exits 0 and shapes nothing.
 - Fold CI's hand-rolled keygen/compose out of `ci.yml:88,147` into this crate (one implementation).
 - `Dockerfile.slurm-controller` is **orphaned** (rubric gap G8).
 - `start_default()`'s 33 containers = the nightly tier's real-node count. The ~100-node ceiling is
   provisioning work, not a code limit.
+
+What shaping does **not** deliver, and [CON-99](/CON/issues/CON-99) still owns: the container tier
+has no cascade (`docker_integration.rs` has no `run_cascade`, and no container-side
+`RoundExecutor` exists). A shaping harness with nothing to run is not a calibration.
 
 ### 7.2 Side-by-side execution tests — **out of scope, and must not gate the framework**
 
