@@ -129,14 +129,23 @@ two defects in `harness/generate_test_mapping.py`'s inventory:
 
 1. **The class filter is `class.name.endswith("Test")`.** Upstream does not
    follow that convention. `CLIClushTest_A`, `CLIClubakTestGroupsConf`,
-   `CLINodesetGroupResolverTest1`, `TaskLocalEnginePollTest` and 14 others are
+   `CLINodesetGroupResolverTest1`, `TaskLocalEnginePollTest` and 11 others are
    real test cases pytest collects. **220 of the 1075 test cases live in classes
    the filter drops** — and those are exactly the classes criterion 2 cares
    about: `CLIClushTest_A` alone is 44 cases, the `CLINodesetGroupResolverTest*`
    set is 22, `CLIClubakTestGroupsConf` is 11.
+
+   The filter's likely origin is the root `pyproject.toml`:
+   `python_classes = ["*Test"]`. But that setting does **not** apply to
+   `unittest.TestCase` subclasses — pytest collects those regardless of their
+   name. All 59 collected classes reach `unittest.TestCase`; 12 of them do not
+   end in `Test`. So the mapping applies a rule to a category of class that the
+   rule never governed, and drops real tests because of it.
 2. **Only methods written directly in the class body are counted.** Most test
    methods are inherited from `TaskLocalMixin`, `TaskDistantMixin` and
    `TaskDistantPdshMixin`. Resolving the inheritance adds **490 more cases**.
+   (The mixins themselves subclass `object`, not `TestCase`, so pytest does not
+   collect them either — the concrete subclasses are what run.)
 
 Together that is 493 of 1075 test cases — **45.9% of the oracle's surface — that
 the mapping has never tracked.** The gate resolves the inheritance and does not
