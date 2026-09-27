@@ -96,7 +96,7 @@ jobs:
 
       - name: Run Docker integration tests
         run: |
-          cargo nextest run -p consortium \
+          cargo nextest run -p consortium-crate \
             --features docker-tests \
             --test docker_integration \
             --profile ci \
@@ -160,7 +160,7 @@ jobs:
 
       - name: Run tool integration tests
         run: |
-          cargo nextest run -p consortium \
+          cargo nextest run -p consortium-crate \
             --features docker-tests \
             --test tool_integration \
             --profile ci \
