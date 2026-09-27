@@ -8,13 +8,28 @@ on:
       - '.gitattributes'
       - 'doc/**'
       - 'README.md'
+  # CON-209: `pull_request` deliberately carries neither a `branches:` filter nor
+  # a `paths-ignore:` list — see the long note in ci.yml.
+  #
+  # `branches:` was the reported defect: naming only the default branches meant
+  # every PR stacked on `ci/un-swallow-gates` or `fix/con-198-harness-crate-ref`
+  # ran neither this workflow nor ci.yml, and reported no checks at all.
+  #
+  # `paths-ignore:` is the same defect wearing a different hat, and it was
+  # dropped with it. On a `pull_request` trigger `paths-ignore` does not skip the
+  # *work*, it suppresses the entire run: a docs-only PR matched the list, no run
+  # was created, and `gh pr checks` printed `no checks reported` — the exact
+  # "silence that reads as safety" this issue is about. Measured cost of
+  # removing it: one GitHub-hosted runner for ~1 minute per PR (run
+  # 36304550046: scorecard 07:54:42 -> 07:55:39; the Docker `integration` job
+  # skips on PRs), which is cheap next to a merged doc PR sitting unverified for
+  # want of a check.
+  #
+  # `push:` keeps both filters: on a push to the trunk nobody is waiting on a
+  # per-PR result, and skipping doc commits there is a pure saving.
   pull_request:
-    branches: [main, master, develop]
-    paths-ignore:
-      - '.gitignore'
-      - '.gitattributes'
-      - 'doc/**'
-      - 'README.md'
+  # Unfiltered for the same reason — see ci.yml.
+  merge_group:
   workflow_dispatch:
     inputs:
       upstream_ref:

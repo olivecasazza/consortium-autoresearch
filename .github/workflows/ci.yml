@@ -7,8 +7,33 @@ on:
       - 'doc/**'
       - 'README.md'
       - '.gitignore'
+  # CON-209: `pull_request` deliberately carries NO `branches:` filter.
+  #
+  # This repository stacks PRs: the `ci/un-swallow-gates` integration branch is
+  # the base for at least #18, #19 and #21, and `fix/con-198-harness-crate-ref`
+  # is the base for #22. A `branches:` allowlist that names only the default
+  # branches means those PRs run *no* CI and report *nothing*:
+  #
+  #     $ gh pr checks 21
+  #     no checks reported on the 'fix/con-113-tool-integration-runner' branch
+  #
+  # "no checks reported" is indistinguishable from "no problems" at a glance, so
+  # an unfiltered trigger is the only honest default. Re-adding a `branches:`
+  # filter here is now a gate failure in harness/ci/check_test_gates.py unless a
+  # comment carrying that script's trigger-justification marker sits directly
+  # above it. Do not add one to "save runner minutes" — a stacked PR costs a few
+  # minutes and its unverified state costs far more. `push:` stays filtered
+  # deliberately: there is no reason to burn runners on every feature-branch
+  # commit when the PR event already covers the same code.
+  #
+  # Note for editors: this comment deliberately does not spell the marker token
+  # out. The audit accepts any governing comment that contains it, so naming the
+  # token here would make this very block self-justifying and quietly re-open the
+  # hole CON-209 closed.
   pull_request:
-    branches: [main, master]
+  # Same reasoning for the merge queue: `merge_group:` with a `branches:` filter
+  # silently skips a queued merge into an integration branch.
+  merge_group:
   workflow_dispatch:
 
 # `checks: write` is required by mikepenz/action-junit-report. Without it the
@@ -74,9 +99,19 @@ jobs:
 
       # Regression guard for this issue: a swallow token (`|| true` /
       # `continue-on-error: true`) anywhere in ci.yml or migration-scorecard.yml
-      # must carry a `justified-guard:` comment, or CI goes red.
+      # must carry a `justified-guard:` comment, or CI goes red. A `branches:`
+      # filter on a PR/merge-queue trigger needs the trigger marker, so a PR
+      # aimed at a non-default base can never again run zero CI (CON-209).
+      #
+      # `--self-test` first, deliberately: it drives the same audits with
+      # built-in fixtures that MUST be rejected. Without it an edit that quietly
+      # turns an audit into a no-op would leave this step green forever, which is
+      # the "a gate nobody has seen fail is a gate nobody can trust" problem this
+      # file exists to prevent.
       - name: Audit test gates
-        run: python3 harness/ci/check_test_gates.py
+        run: |
+          python3 harness/ci/check_test_gates.py --self-test
+          python3 harness/ci/check_test_gates.py
 
       - name: Run unit tests
         run: |
