@@ -20,14 +20,17 @@ name: Perf Gate
 
 on:
   pull_request:
-    branches: [main, master, develop]
+    # sync-upstream-1.10.1 is this repo's integration line: it is where the
+    # consortium work actually lands, and the perf scripts only exist there. The
+    # gate has to cover it or it never runs for anyone.
+    branches: [main, master, develop, sync-upstream-1.10.1]
     paths-ignore:
       - 'doc/**'
       - 'docs-index/**'
       - '*.md'
       - '.gitignore'
   push:
-    branches: [main, master, develop]
+    branches: [main, master, develop, sync-upstream-1.10.1]
     tags: ['v*']
     paths-ignore:
       - 'doc/**'
@@ -67,6 +70,11 @@ jobs:
     if: github.event_name != 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    # This repo sets default_workflow_permissions=read, so the report-comment
+    # step below would 403 on createComment without an explicit grant.
+    permissions:
+      contents: read
+      pull-requests: write
     outputs:
       verdict: ${{ steps.gate.outputs.verdict }}
     steps:
@@ -75,6 +83,9 @@ jobs:
           fetch-depth: 0
 
       - name: Install Rust
+        # rust-toolchain.toml in the repo root pins 1.94.1, and a toolchain
+        # file outranks the rustup default, so cargo benches on the pin even
+        # though this installs stable. Keep @stable to match ci.yml/tests.yml.
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install jq
@@ -191,10 +202,16 @@ jobs:
 
       - name: Enforce hard threshold
         # Single place that actually turns the verdict red, so the soft/warn
-        # path above can never accidentally fail the build.
-        if: steps.gate.outputs.verdict == 'fail'
+        # path above can never accidentally fail the build. The Gate step runs
+        # with continue-on-error, so *every* non-green verdict has to be caught
+        # here or it reports success: 'error' (usage failure) and 'no-signal'
+        # (dead bench) must not read as a pass.
+        if: steps.gate.outputs.verdict != 'pass' && steps.gate.outputs.verdict != ''
         run: |
-          echo "::error::Perf regression at or above the hard threshold."
+          case "${{ steps.gate.outputs.verdict }}" in
+            fail) echo "::error::Perf regression at or above the hard threshold." ;;
+            *)    echo "::error::Perf gate could not produce a verdict (${{ steps.gate.outputs.verdict }}, exit ${{ steps.gate.outputs.exit_code }}). Treating a perf gate that cannot measure as a failure, not a pass." ;;
+          esac
           exit 1
 
   # ── Refresh the stored baseline for the branch or tag ────────────────────
@@ -209,6 +226,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The repo's rust-toolchain.toml pin wins over the rustup default.
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Install jq
@@ -227,26 +245,37 @@ jobs:
             --bench cascade_strategies -- "$PERF_BENCH_FILTER" --quick
 
       - name: Store baseline
-        id: store
         run: |
           REF='${{ github.ref }}'
+          # peter-evans/create-pull-request commits the working tree, so the
+          # stored file is what lands in the baseline PR below.
           bash autoresearch/scripts/perf-baseline.sh store \
             --ref "$REF" --sha "${{ github.sha }}" \
             --notes "measured on ${{ github.run_id }}" \
             --est target/criterion > /dev/null
-          PATH_OUT='autoresearch/perf-baselines/refs/'"$(echo "$REF" | sed 's|^refs/||; s|/|__|g')"'.json'
-          echo "path=$PATH_OUT" >> "$GITHUB_OUTPUT"
-          echo "Stored $REF -> $PATH_OUT"
+          echo "Stored $REF -> autoresearch/perf-baselines/refs/$(echo "$REF" | sed 's|^refs/||; s|/|__|g').json"
 
       - name: Open baseline-update PR
-        if: github.event_name == 'workflow_dispatch' && inputs.update_baseline
+        # A push to a non-default branch is how a branch gets its *first*
+        # baseline: without this arm the job would spend ~25 minutes measuring
+        # and then discard the result, leaving the gate with nothing to compare
+        # against (found=false -> SKIP). Default-branch pushes are refreshed in
+        # place via an explicit dispatch, since a PR into itself is not a thing.
+        if: >-
+          (github.event_name == 'workflow_dispatch' && inputs.update_baseline) ||
+          (github.event_name == 'push' &&
+           github.ref != format('refs/heads/{0}', github.event.repository.default_branch))
         uses: peter-evans/create-pull-request@v6
         with:
           branch: perf/baseline-${{ github.run_id }}
+          # Default would be the repository default branch, which is wrong for a
+          # per-branch baseline: on a push to sync-upstream-1.10.1 the baseline
+          # must land back on sync-upstream-1.10.1.
+          base: ${{ github.ref_name }}
           commit-message: "chore(perf): refresh baseline for ${{ github.ref_name }}"
           title: "chore(perf): refresh perf baseline for ${{ github.ref_name }}"
           body: |
-            Automated baseline refresh triggered manually.
+            Automated perf baseline refresh.
 
             - ref: `${{ github.ref }}`
             - sha: `${{ github.sha }}`
