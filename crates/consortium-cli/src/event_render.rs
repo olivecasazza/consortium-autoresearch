@@ -617,7 +617,7 @@ pub struct LiveTreeRenderer {
     accumulator: SnapshotAccumulator,
     color: bool,
     max_depth: Option<usize>,
-    /// Optional Mutex<Vec<u8>> for testing — when Some, frames go here
+    /// Optional `Mutex<Vec<u8>>` for testing — when Some, frames go here
     /// instead of stdout. Production passes None.
     capture: Option<Mutex<Vec<u8>>>,
     /// Number of lines printed in the last frame. On the next repaint

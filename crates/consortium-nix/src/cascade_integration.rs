@@ -185,8 +185,14 @@ pub struct CascadeCopyConfig<'a> {
     /// Per-edge `nix copy` timeout. Default 5min.
     pub timeout: Duration,
     /// Optional event sink for live UI. Use [`NullSink`] for headless.
-    /// Reused across all groups via a [`RemappingSink`] wrapper that
-    /// translates per-group local NodeIds into globally-unique ones.
+    /// One sink is reused across every per-toplevel group, so it
+    /// receives a single unified view: NodeIds are already translated
+    /// from each group's local 0..k space into deploy-global ids, and
+    /// exactly one [`CascadeEvent::Started`] /
+    /// [`CascadeEvent::Finished`] pair is emitted for the whole deploy
+    /// rather than one per group. The `RemappingSink` that does this
+    /// translation is crate-private — its local→global map is derived
+    /// from the grouping, so there is nothing for a caller to build.
     pub events: Option<&'a dyn EventSink>,
 }
 
