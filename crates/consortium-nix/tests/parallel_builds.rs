@@ -1,11 +1,9 @@
 //! Integration tests for parallel build execution via DAG.
 
-use consortium_nix::build::{build_closures, BuildResults};
+use consortium_nix::build::BuildResults;
 use consortium_nix::config::{
     DeployAction, DeploymentNode, DeploymentPlan, DeploymentTarget, ProfileType,
 };
-use std::sync::{Arc, Mutex};
-use std::time::Instant;
 
 /// Mock build function that tracks execution.
 /// Returns a simple mock path if successful.

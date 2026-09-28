@@ -387,14 +387,20 @@ impl CascadeTrace {
 
         let mut out = String::new();
 
+        // Read-only inputs shared by every level of the recursive render, bundled
+        // so `render_node` takes the tree as one argument instead of three.
+        struct TreeView<'a> {
+            seeds: &'a HashSet<u32>,
+            children: &'a HashMap<u32, Vec<u32>>,
+            edge_rounds: &'a HashMap<(u32, u32), u32>,
+        }
+
         // Recursive renderer
         fn render_node(
             id: u32,
             prefix: &str,
             is_last: bool,
-            seeds: &HashSet<u32>,
-            children: &HashMap<u32, Vec<u32>>,
-            edge_rounds: &HashMap<(u32, u32), u32>,
+            tree: &TreeView<'_>,
             parent: Option<u32>,
             out: &mut String,
         ) {
@@ -408,10 +414,11 @@ impl CascadeTrace {
                 "├── "
             };
 
-            let label = if seeds.contains(&id) {
+            let label = if tree.seeds.contains(&id) {
                 format!("n{id} (seed)")
             } else if let Some(p) = parent {
-                let round_label = edge_rounds
+                let round_label = tree
+                    .edge_rounds
                     .get(&(p, id))
                     .map(|r| format!("r{r}"))
                     .unwrap_or_else(|| "?".to_string());
@@ -439,37 +446,25 @@ impl CascadeTrace {
                 format!("{prefix}│   ")
             };
 
-            if let Some(kids) = children.get(&id) {
+            if let Some(kids) = tree.children.get(&id) {
                 let n = kids.len();
                 for (i, child) in kids.iter().enumerate() {
                     let child_is_last = i == n - 1;
-                    render_node(
-                        *child,
-                        &child_prefix,
-                        child_is_last,
-                        seeds,
-                        children,
-                        edge_rounds,
-                        Some(id),
-                        out,
-                    );
+                    render_node(*child, &child_prefix, child_is_last, tree, Some(id), out);
                 }
             }
         }
 
+        let tree = TreeView {
+            seeds: &seeds,
+            children: &children,
+            edge_rounds: &edge_rounds,
+        };
+
         let n = roots.len();
         for (i, root) in roots.iter().enumerate() {
             let is_last = i == n - 1;
-            render_node(
-                *root,
-                "",
-                is_last,
-                &seeds,
-                &children,
-                &edge_rounds,
-                None,
-                &mut out,
-            );
+            render_node(*root, "", is_last, &tree, None, &mut out);
         }
 
         out
@@ -534,8 +529,8 @@ impl CascadeTrace {
 mod tests {
     use super::*;
     use crate::cascade::{
-        Cascade, CascadeError, CascadeNode, CascadePlan, CascadeState, CascadeStrategy, Log2FanOut,
-        NetworkProfile, NodeId, NodeIdAlloc, RoundExecutor, RoundSnapshot,
+        Cascade, CascadeError, CascadeNode, CascadePlan, Log2FanOut, NetworkProfile, NodeId,
+        NodeIdAlloc, RoundExecutor, RoundSnapshot,
     };
     use std::collections::{HashMap, HashSet};
     use std::sync::Arc;

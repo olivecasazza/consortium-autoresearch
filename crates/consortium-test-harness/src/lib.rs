@@ -31,6 +31,10 @@ use std::time::{Duration, Instant};
 use consortium::worker::ssh::SshOptions;
 use consortium_nix::config::{DeploymentNode, FleetConfig, ProfileType};
 
+pub mod netem;
+
+pub use netem::{delay_from_duration, rate_from_bytes_per_sec, NetemProfile, DEFAULT_IFACE};
+
 /// Cluster topology configuration.
 #[derive(Debug, Clone)]
 pub struct ClusterTopology {
@@ -237,6 +241,112 @@ impl DockerCluster {
         self.node_ports.len()
     }
 
+    // ─── Network shaping ───────────────────────────────────────────────────
+
+    /// Run a program inside one node and return its stdout.
+    ///
+    /// Addressed through `docker compose exec` rather than by guessing container
+    /// names, so the compose project the cluster started is the one that is
+    /// addressed.
+    ///
+    /// This is the primitive the shaping assertions are built on: measuring
+    /// whether a delay *took effect* means reading a clock on the node, not
+    /// trusting that `tc` exited 0.
+    pub fn run_in_node(&self, node: &str, program: &str, args: &[&str]) -> Result<String, String> {
+        if !self.node_ports.contains_key(node) {
+            return Err(format!("unknown node {node} in this cluster"));
+        }
+        let compose_file = self
+            .compose_file
+            .to_str()
+            .ok_or_else(|| "compose file path is not valid UTF-8".to_string())?;
+
+        let output = Command::new("docker")
+            .args([
+                "compose",
+                "-f",
+                compose_file,
+                "-p",
+                &self.project_name,
+                "exec",
+                "-T",
+                node,
+                program,
+            ])
+            .args(args)
+            .output()
+            .map_err(|e| format!("docker compose exec {node} {program} failed: {e}"))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("{program} on {node} failed: {stderr}"));
+        }
+
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    }
+
+    /// Impose a `netem` profile on one node's network interface.
+    ///
+    /// This is the container-side half of a sim↔container calibration: the sim
+    /// models bandwidth + latency per edge, and without shaping here the two
+    /// tiers are not comparable (ADR 0001 §7.1).
+    ///
+    /// Rejects an empty profile rather than running a `tc` command that exits 0
+    /// and shapes nothing — see [`netem`] for why that no-op matters.
+    ///
+    /// Requires `CAP_NET_ADMIN` in the node, which `plan_compose` grants to
+    /// every generated service.
+    pub fn apply_netem(
+        &self,
+        node: &str,
+        profile: &NetemProfile,
+        iface: &str,
+    ) -> Result<(), String> {
+        let args = profile.qdisc_args(iface)?;
+        let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
+        self.run_in_node(node, "tc", &borrowed).map(|_| ())
+    }
+
+    /// Remove shaping from one node's interface, restoring the kernel default
+    /// qdisc.
+    ///
+    /// Idempotent: an already-unshaped interface reports no such qdisc, which
+    /// this treats as success. Without that, teardown would fail on any node a
+    /// test never shaped and shaping would leak between tests.
+    pub fn clear_netem(&self, node: &str, iface: &str) -> Result<(), String> {
+        let args = NetemProfile::clear_args(iface);
+        let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
+        match self.run_in_node(node, "tc", &borrowed) {
+            Ok(_) => Ok(()),
+            Err(err) => {
+                if is_absent_qdisc(&err) {
+                    Ok(())
+                } else {
+                    Err(err)
+                }
+            }
+        }
+    }
+
+    /// Current root qdisc on one node's interface, as `tc qdisc show` reports it.
+    ///
+    /// Useful for asserting *which* profile is installed. Note that reading this
+    /// back only proves `tc` was asked to apply the profile; asserting that
+    /// shaping actually took effect means measuring timing, not parsing this.
+    pub fn qdisc_show(&self, node: &str, iface: &str) -> Result<String, String> {
+        self.run_in_node(node, "tc", &["qdisc", "show", "dev", iface])
+    }
+
+    /// Crate-root directory this cluster generated its keys and compose file in.
+    pub fn work_dir(&self) -> &Path {
+        &self.docker_dir
+    }
+
+    /// The topology this cluster was started with.
+    pub fn topology(&self) -> &ClusterTopology {
+        &self.topology
+    }
+
     // ─── Internal ────────────────────────────────────────────────────────
 
     /// Clean up any stale consortium test containers from previous runs.
@@ -307,68 +417,7 @@ impl DockerCluster {
         topology: &ClusterTopology,
         _project_name: &str,
     ) -> Result<(PathBuf, HashMap<String, u16>), String> {
-        let mut services = Vec::new();
-        let mut ports = HashMap::new();
-        let mut port = BASE_PORT + 1;
-
-        let anchor = r#"x-ssh-node: &ssh-node
-  build:
-    context: .
-    dockerfile: Dockerfile.ssh-node
-  volumes:
-    - ./ssh/authorized_keys:/root/.ssh/authorized_keys:ro
-  networks:
-    - cluster
-  restart: "no""#;
-
-        // Compute nodes
-        for i in 1..=topology.compute_count {
-            let name = format!("compute-{:02}", i);
-            services.push(format!(
-                "  {}:\n    <<: *ssh-node\n    hostname: {}\n    ports:\n      - \"{}:22\"",
-                name, name, port
-            ));
-            ports.insert(name, port);
-            port += 1;
-        }
-
-        // GPU nodes
-        for i in 1..=topology.gpu_count {
-            let name = format!("gpu-{:02}", i);
-            services.push(format!(
-                "  {}:\n    <<: *ssh-node\n    hostname: {}\n    ports:\n      - \"{}:22\"",
-                name, name, port
-            ));
-            ports.insert(name, port);
-            port += 1;
-        }
-
-        // Login nodes
-        for i in 1..=topology.login_count {
-            let name = format!("login-{:02}", i);
-            services.push(format!(
-                "  {}:\n    <<: *ssh-node\n    hostname: {}\n    ports:\n      - \"{}:22\"",
-                name, name, port
-            ));
-            ports.insert(name, port);
-            port += 1;
-        }
-
-        // Controller
-        if topology.controller {
-            let name = "controller".to_string();
-            services.push(format!(
-                "  {}:\n    <<: *ssh-node\n    hostname: {}\n    ports:\n      - \"{}:22\"",
-                name, name, port
-            ));
-            ports.insert(name, port);
-        }
-
-        let yaml = format!(
-            "{}\n\nservices:\n{}\n\nnetworks:\n  cluster:\n    driver: bridge\n",
-            anchor,
-            services.join("\n\n")
-        );
+        let (yaml, ports) = plan_compose(topology);
 
         let compose_path = docker_dir.join("docker-compose.generated.yml");
         let mut f = std::fs::File::create(&compose_path)
@@ -460,10 +509,82 @@ impl DockerCluster {
     }
 }
 
+/// The compose file every SSH node is generated from, and the node → host port
+/// map that goes with it.
+///
+/// Pure: no Docker, no filesystem, no I/O. Everything that can be checked
+/// without a running daemon is checked here by unit test, because a compose
+/// file that is subtly wrong fails much later and much less legibly.
+fn plan_compose(topology: &ClusterTopology) -> (String, HashMap<String, u16>) {
+    let mut services = Vec::new();
+    let mut ports = HashMap::new();
+    let mut port = BASE_PORT + 1;
+
+    // CAP_NET_ADMIN is required for `tc qdisc` (see `netem`). Docker's default
+    // capability set does *not* include it — the container's root user is
+    // unprivileged with respect to its own network namespace — so without this
+    // every `tc` call fails with EPERM and the shaping never happens.
+    let anchor = r#"x-ssh-node: &ssh-node
+  build:
+    context: .
+    dockerfile: Dockerfile.ssh-node
+  volumes:
+    - ./ssh/authorized_keys:/root/.ssh/authorized_keys:ro
+  networks:
+    - cluster
+  cap_add:
+    - NET_ADMIN
+  restart: "no""#;
+
+    let mut push = |name: &str| {
+        services.push(format!(
+            "  {}:\n    <<: *ssh-node\n    hostname: {}\n    ports:\n      - \"{}:22\"",
+            name, name, port
+        ));
+        ports.insert(name.to_string(), port);
+        port += 1;
+    };
+
+    for i in 1..=topology.compute_count {
+        push(&format!("compute-{:02}", i));
+    }
+
+    for i in 1..=topology.gpu_count {
+        push(&format!("gpu-{:02}", i));
+    }
+
+    for i in 1..=topology.login_count {
+        push(&format!("login-{:02}", i));
+    }
+
+    if topology.controller {
+        push("controller");
+    }
+
+    let yaml = format!(
+        "{}\n\nservices:\n{}\n\nnetworks:\n  cluster:\n    driver: bridge\n",
+        anchor,
+        services.join("\n\n")
+    );
+
+    (yaml, ports)
+}
+
 impl Drop for DockerCluster {
     fn drop(&mut self) {
         let _ = self.stop();
     }
+}
+
+/// Whether a `tc` failure means "there was nothing to delete" rather than a
+/// real error.
+///
+/// `tc qdisc del` on an unshaped interface fails with `RTNETLINK answers: No
+/// such file or directory` (and on some kernels `Cannot find specified qdisc`).
+/// Teardown must treat that as already-clear, otherwise clearing shaping is
+/// not idempotent and a node a test never shaped fails the teardown.
+fn is_absent_qdisc(err: &str) -> bool {
+    err.contains("No such file or directory") || err.contains("Cannot find specified qdisc")
 }
 
 /// Check if Docker is available. Returns false if docker is not installed
@@ -474,4 +595,107 @@ pub fn docker_available() -> bool {
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod netem_teardown_tests {
+    use super::is_absent_qdisc;
+
+    #[test]
+    fn absent_qdisc_messages_are_treated_as_already_clear() {
+        // The exact stderr `tc qdisc del` produces on an unshaped interface.
+        assert!(is_absent_qdisc(
+            "tc on compute-01 failed: RTNETLINK answers: No such file or directory"
+        ));
+        assert!(is_absent_qdisc(
+            "tc on compute-01 failed: Error: Cannot find specified qdisc."
+        ));
+    }
+
+    #[test]
+    fn real_tc_failures_are_not_swallowed() {
+        // If these were treated as "already clear", a genuine shaping failure
+        // would be silently ignored and the next test would run unshaped.
+        assert!(!is_absent_qdisc(
+            "tc on compute-01 failed: Error: Exclusivity flag on, cannot modify"
+        ));
+        assert!(!is_absent_qdisc(
+            "tc on compute-01 failed: command not found"
+        ));
+        assert!(!is_absent_qdisc(
+            "docker compose exec compute-01 tc failed: No such container"
+        ));
+    }
+}
+
+#[cfg(test)]
+mod compose_plan_tests {
+    use super::{plan_compose, ClusterTopology};
+
+    #[test]
+    fn every_node_is_granted_cap_net_admin() {
+        // `tc qdisc` needs CAP_NET_ADMIN in the container's network namespace,
+        // and Docker's default capability set does not include it. Without this
+        // every shaping call fails with EPERM — the cluster starts, the tests
+        // run, and nothing is ever shaped. That is a silent no-op at the level
+        // of the whole lane, so it is asserted here, where it costs nothing.
+        let (yaml, _) = plan_compose(&ClusterTopology {
+            compute_count: 2,
+            gpu_count: 1,
+            login_count: 1,
+            controller: true,
+        });
+        assert!(
+            yaml.contains("cap_add:\n    - NET_ADMIN"),
+            "NET_ADMIN must be granted in the ssh-node anchor, got:\n{yaml}"
+        );
+        // It is granted by the anchor every service merges, so a service cannot
+        // exist that lacks it.
+        let service_count = yaml.matches("<<: *ssh-node").count();
+        assert_eq!(service_count, 5, "expected 5 services, got {service_count}");
+    }
+
+    #[test]
+    fn every_service_merges_the_anchor() {
+        // Each service is `<<: *ssh-node`, so the anchor's build/volume/network/
+        // cap_add apply to all of them. A service that stopped merging it would
+        // silently lose NET_ADMIN.
+        let (yaml, ports) = plan_compose(&ClusterTopology {
+            compute_count: 3,
+            gpu_count: 0,
+            login_count: 0,
+            controller: false,
+        });
+        assert_eq!(ports.len(), 3);
+        assert_eq!(yaml.matches("<<: *ssh-node").count(), 3);
+        assert!(yaml.contains("cap_add:"));
+    }
+
+    #[test]
+    fn ports_are_unique_and_follow_the_node_order() {
+        let (yaml, ports) = plan_compose(&ClusterTopology {
+            compute_count: 2,
+            gpu_count: 1,
+            login_count: 1,
+            controller: true,
+        });
+        assert_eq!(ports.len(), 5);
+        assert_eq!(ports["compute-01"], 2201);
+        assert_eq!(ports["compute-02"], 2202);
+        assert_eq!(ports["gpu-01"], 2203);
+        assert_eq!(ports["login-01"], 2204);
+        assert_eq!(ports["controller"], 2205);
+
+        let mut seen: Vec<u16> = ports.values().copied().collect();
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(seen.len(), 5, "host ports must not collide: {ports:?}");
+
+        for (name, port) in &ports {
+            assert!(
+                yaml.contains(&format!("- \"{port}:22\"")),
+                "port for {name} is not published in the compose file"
+            );
+        }
+    }
 }
