@@ -55,24 +55,41 @@ def scan_python_tests() -> dict[str, list[str]]:
 
 
 def scan_rust_tests() -> list[str]:
-    """Run `cargo test -- --list` and extract all test names."""
+    """Run `cargo test -- --list` and extract all test names.
+
+    A cargo failure here is not a soft miss: the Rust side of the mapping would
+    come back empty, every Python test would be reported as unmapped, and the
+    graduation gate would read that as "the port has barely started" rather than
+    "the tool that measures it is broken". So every failure mode raises.
+    """
+    cmd = ["cargo", "test", "-p", "consortium-crate", "--", "--list"]
     try:
         proc = subprocess.run(
-            ["cargo", "test", "-p", "consortium", "--", "--list"],
+            cmd,
             capture_output=True,
             text=True,
             cwd=str(REPO_ROOT),
             timeout=60,
         )
-        tests = []
-        for line in proc.stdout.splitlines():
-            line = line.strip()
-            if line.endswith(": test"):
-                tests.append(line.removesuffix(": test"))
-        return sorted(tests)
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        print("  WARN: Could not run cargo test --list", file=sys.stderr)
-        return []
+    except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+        raise RuntimeError(f"Could not run `{' '.join(cmd)}`: {exc}") from exc
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"`{' '.join(cmd)}` exited {proc.returncode}. Rust test names would "
+            f"silently come back empty and every Python test would map to "
+            f"nothing.\n--- cargo stderr ---\n{proc.stderr.strip()}"
+        )
+    tests = []
+    for line in proc.stdout.splitlines():
+        line = line.strip()
+        if line.endswith(": test"):
+            tests.append(line.removesuffix(": test"))
+    if not tests:
+        raise RuntimeError(
+            f"`{' '.join(cmd)}` exited 0 but listed no tests. An empty Rust "
+            f"mapping is a silent failure, not a legitimate result."
+        )
+    return sorted(tests)
 
 
 def python_to_rust_name(py_class: str, py_method: str) -> str:
@@ -216,4 +233,10 @@ def generate_mapping(update: bool = False):
 
 if __name__ == "__main__":
     update = "--update" in sys.argv
-    generate_mapping(update=update)
+    try:
+        generate_mapping(update=update)
+    except RuntimeError as exc:
+        # Never write a mapping that silently claims "0 Rust tests" because a
+        # cargo invocation failed. Fail loudly and leave the existing file alone.
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(1)
