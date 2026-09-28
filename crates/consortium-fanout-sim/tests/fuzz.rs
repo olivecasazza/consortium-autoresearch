@@ -213,18 +213,37 @@ proptest! {
             }
         }
 
-        // Tightened: when KillNodeAtRound was injected with round=0,
-        // the killed node MUST appear in the failure tree (it can never
-        // receive the closure since every attempt to copy to it fails
-        // from round 0). Older test was silent about this — would have
-        // passed even if the kill schedule was being ignored.
+        // When KillNodeAtRound is injected at round 0, the killed node
+        // MUST appear in the failure tree — it can never receive the
+        // closure because every copy attempt to it fails from round 0.
+        //
+        // One precondition the older version of this assertion missed:
+        // this case runs with `seed_fraction: 0.0`, which makes
+        // `Scenario::run` use `SeedDistribution::Single` — and that
+        // always seeds `NodeId(0)` (fixtures.rs). A kill targeting the
+        // seed node is a *no-op*: the seed already holds the closure and
+        // no edge ever targets it, so the schedule never fires, the
+        // cascade converges fully, and `result.failed` is `None`. The
+        // assertion below then failed on a correct simulator.
+        //
+        // Confirmed against CI: `seed=4218163067, n_nodes=21,
+        // strategy_idx=1, failure_seed=15529019868851313450` samples
+        // `killed = NodeId(0)`, and proptest's random generator hits that
+        // combination often enough to redden `master` and five stacked
+        // PRs. So gate on "the kill can actually fire" rather than
+        // assuming it can.
         if let Some(killed) = killed_node {
-            // Only assert when the kill could actually have fired:
-            // round 0 means it fires on first attempt regardless of
+            // The seed set is `SeedDistribution::Single` = {NodeId(0)}
+            // whenever seed_fraction == 0.0, independent of `seed`.
+            let is_seed_node = killed == NodeId(0);
+            // Round 0 means it fires on the first attempt regardless of
             // strategy. Round > 0 may not fire if the cascade halts
-            // before then (which is valid for Steiner on uniform).
-            // We check the schedule's round via re-extraction:
-            if let FailureSchedule::KillNodeAtRound { round: 0, .. } = cfg.failures {
+            // before then (valid for Steiner on uniform).
+            let fires_at_round_zero = matches!(
+                cfg.failures,
+                FailureSchedule::KillNodeAtRound { round: 0, .. }
+            );
+            if fires_at_round_zero && !is_seed_node {
                 prop_assert!(
                     !result.converged.iter().any(|&n| n == killed),
                     "[{}] killed node {killed:?} still appears in converged set: {:?}",
@@ -241,6 +260,25 @@ proptest! {
                     err.affected_nodes().contains(&killed),
                     "[{}] killed node {killed:?} missing from affected set",
                     strategy.name(),
+                );
+            } else if is_seed_node {
+                // The kill is a no-op, so the cascade must converge
+                // *cleanly* — no failure tree at all. Asserting this
+                // keeps the skipped branch honest instead of silent.
+                prop_assert!(
+                    result.is_success(),
+                    "[{}] killing the seed node should be a no-op, but the \
+                     cascade reported a failure: {:?}",
+                    strategy.name(),
+                    result.failed,
+                );
+                prop_assert!(
+                    result.converged.len() as u32 == cfg.n_nodes,
+                    "[{}] killing the seed node should not stop convergence; \
+                     got {}/{} converged",
+                    strategy.name(),
+                    result.converged.len(),
+                    cfg.n_nodes,
                 );
             }
         }
@@ -278,3 +316,98 @@ proptest! {
         prop_assert_eq!(s1, s2, "converged sets diverge between identical-seed runs");
     }
 }
+
+/// Regression pin for the master-red CON-240 case. The proptest above
+/// hit `killed = NodeId(0)` — which is always the seed node — and its
+/// round-0 assertion then required a failure that can never occur. This
+/// deterministic test replays the exact CI input and locks in the
+/// corrected expectation: killing the seed is a no-op.
+#[test]
+fn killing_seed_node_is_a_noop() {
+    // Exact input from the GitHub Actions failure at run 36308112275:
+    //   minimal failing input: seed = 4218163067, n_nodes = 21,
+    //   bandwidth = Bimodal { slow: 34207121, fast: 2127617055,
+    //     fast_fraction: 0.22865491590967524 },
+    //   strategy_idx = 1, failure_seed = 15529019868851313450
+    let mut frng = ChaCha8Rng::seed_from_u64(15529019868851313450);
+    let failure_kind: u8 = frng.gen_range(0u8..=2);
+    assert_eq!(failure_kind, 1, "precondition: failure_kind must be kill");
+    let killed = NodeId(frng.gen_range(0..21));
+    assert_eq!(killed, NodeId(0), "precondition: killed node must be the seed");
+    let round = frng.gen_range(0..6);
+    assert_eq!(round, 0, "precondition: kill must be injected at round 0");
+
+    let cfg = ScenarioConfig {
+        seed: 4218163067,
+        n_nodes: 21,
+        seed_fraction: 0.0,
+        closure_bytes: 10 * 1024 * 1024,
+        bandwidth: BandwidthDistribution::Bimodal {
+            slow: 34207121,
+            fast: 2127617055,
+            fast_fraction: 0.22865491590967524,
+        },
+        uplinks: None,
+        failures: FailureSchedule::KillNodeAtRound {
+            node: killed,
+            round,
+        },
+        max_rounds: 64,
+    };
+    let result = Scenario::new(cfg.clone()).run(&MaxBottleneckSpanning);
+    assert!(
+        result.is_success(),
+        "killing the seed node must be a no-op; got {:?}",
+        result.failed
+    );
+    assert_eq!(result.converged.len() as u32, cfg.n_nodes);
+}
+
+/// Regression pin for the real invariant the fuzz assertion protects:
+/// a round-0 kill of a NON-seed node must converge every other node,
+/// report the failure, and reference the killed node in affected_nodes.
+#[test]
+fn killing_nonseed_node_at_round0_reports_failure() {
+    let n_nodes = 21;
+    let killed = NodeId(9); // non-seed
+    let cfg = ScenarioConfig {
+        seed: 4218163067,
+        n_nodes,
+        seed_fraction: 0.0,
+        closure_bytes: 10 * 1024 * 1024,
+        bandwidth: BandwidthDistribution::Bimodal {
+            slow: 34207121,
+            fast: 2127617055,
+            fast_fraction: 0.22865491590967524,
+        },
+        uplinks: None,
+        failures: FailureSchedule::KillNodeAtRound {
+            node: killed,
+            round: 0,
+        },
+        max_rounds: 64,
+    };
+    for strategy in [
+        &Log2FanOut as &dyn CascadeStrategy,
+        &MaxBottleneckSpanning,
+        &SteinerGreedy,
+    ] {
+        let result = Scenario::new(cfg.clone()).run(strategy);
+        assert!(
+            !result.converged.iter().any(|&n| n == killed),
+            "[{}] killed node {killed:?} still in converged: {:?}",
+            strategy.name(),
+            result.converged,
+        );
+        let err = result.failed.as_ref().expect("expected a failure tree");
+        assert!(
+            err.affected_nodes().contains(&killed),
+            "[{}] killed node {killed:?} missing from affected: {:?}",
+            strategy.name(),
+            err.affected_nodes(),
+        );
+        // Everything except the killed node converges.
+        assert_eq!(result.converged.len() as u32, cfg.n_nodes - 1);
+    }
+}
+
