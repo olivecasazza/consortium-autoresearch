@@ -107,32 +107,41 @@ impl RangeSet {
 
             let (baserange, step) = if subrange.contains('/') {
                 let parts: Vec<&str> = subrange.splitn(2, '/').collect();
-                let step_str = parts[1];
-                let step: i64 = step_str.parse().map_err(|_| RangeSetError::ParseError {
-                    part: subrange.to_string(),
-                    msg: "cannot convert string to integer".to_string(),
-                })?;
+                // Python's int() tolerates surrounding whitespace, so trim here too
+                let step: i64 = parts[1]
+                    .trim()
+                    .parse()
+                    .map_err(|_| RangeSetError::ParseError {
+                        part: subrange.to_string(),
+                        msg: "cannot convert string to integer".to_string(),
+                    })?;
                 (parts[0], step)
             } else {
                 (subrange, 1i64)
             };
 
-            // Parse begin and end
-            let (begin_str, end_str, _begin_sign, _end_sign) =
+            // Parse begin-end part of range, handling negative numbers.
+            let (begin_str, end_str, begin_sign, end_sign) =
                 self.parse_range_part(baserange, subrange, step)?;
 
             // Compute padding
             let (start, stop, pad) = self.compute_padding(&begin_str, &end_str, subrange)?;
 
             // Validate
-            if stop > 1e100 as i64 || start > stop || step < 1 {
+            if pad > 0 && begin_sign < 0 {
+                return Err(RangeSetError::ParseError {
+                    part: subrange.to_string(),
+                    msg: "padding not supported in negative ranges".to_string(),
+                });
+            }
+            if stop > 1e100 as i64 || start * begin_sign > stop * end_sign || step < 1 {
                 return Err(RangeSetError::ParseError {
                     part: subrange.to_string(),
                     msg: "invalid values in range".to_string(),
                 });
             }
 
-            self.add_range(start, stop + 1, step, pad as u32);
+            self.add_range(start * begin_sign, stop * end_sign + 1, step, pad as u32);
         }
         Ok(())
     }
@@ -277,6 +286,39 @@ impl RangeSet {
         self.elements.is_empty()
     }
 
+    /// Clear all elements from this set.
+    pub fn clear(&mut self) {
+        self.elements.clear();
+    }
+
+    /// Build a set from an ordered iterable of node expressions.
+    ///
+    /// Mirrors `RangeSet.fromlist()`: every item is parsed as range notation,
+    /// so `"5-8"` contributes the four elements `5,6,7,8`. Items that fail to
+    /// parse are reported through [`RangeSetError::ParseError`].
+    pub fn from_strings<I, S>(items: I) -> Result<Self>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let mut rs = Self::new();
+        for item in items {
+            rs._parse(item.as_ref())?;
+        }
+        Ok(rs)
+    }
+
+    /// Build a set from a half-open integer range `[start, stop)`.
+    ///
+    /// Mirrors `RangeSet(range(start, stop))`.
+    pub fn from_range(start: i64, stop: i64) -> Self {
+        let mut rs = Self::new();
+        if start < stop {
+            rs.add_range(start, stop, 1, 0);
+        }
+        rs
+    }
+
     /// Add a string element directly.
     pub fn add_str(&mut self, s: &str) {
         self.elements.insert(s.to_string());
@@ -329,6 +371,71 @@ impl RangeSet {
         sorted_elements(&self.elements)
             .into_iter()
             .map(|s| s.parse::<i64>().unwrap_or(0))
+    }
+
+    /// Access the element at `index` in sorted order, as `RangeSet.__getitem__`
+    /// does for an integer index. Negative indices count from the end.
+    ///
+    /// Returns `None` where Python raises `IndexError`.
+    pub fn get(&self, index: isize) -> Option<String> {
+        let sorted = sorted_elements(&self.elements);
+        let len = sorted.len();
+        let idx = if index < 0 {
+            len as isize + index
+        } else {
+            index
+        };
+        if idx < 0 || idx >= len as isize {
+            return None;
+        }
+        Some(sorted[idx as usize].clone())
+    }
+
+    /// Sub-set of the elements in sorted-order range `[start, stop)`.
+    ///
+    /// Mirrors `RangeSet.__getitem__` for a slice: out-of-range indices are
+    /// clamped, and the result inherits this set's autostep setting.
+    pub fn slice(&self, start: isize, stop: isize) -> RangeSet {
+        let sorted = sorted_elements(&self.elements);
+        let len = sorted.len() as isize;
+        let clamp = |i: isize| -> usize {
+            let i = if i < 0 { len + i } else { i };
+            i.clamp(0, len) as usize
+        };
+        let mut result = RangeSet::new();
+        result.set_autostep(self.autostep());
+        let (begin, end) = (clamp(start), clamp(stop));
+        if begin >= end {
+            return result;
+        }
+        for elem in &sorted[begin..end] {
+            result.add_str(elem);
+        }
+        result
+    }
+
+    /// Split the set into at most `nbr` sub-sets of near-equal size.
+    ///
+    /// Mirrors `RangeSet.split()`.
+    pub fn split(&self, nbr: usize) -> Vec<RangeSet> {
+        assert!(nbr > 0);
+        let len = self.len();
+        let slice_size = len / nbr;
+        let leftover = len % nbr;
+
+        let mut result = Vec::new();
+        let mut begin = 0;
+        for i in 0..nbr.min(len) {
+            let length = slice_size + usize::from(i < leftover);
+            result.push(self.slice(begin as isize, (begin + length) as isize));
+            begin += length;
+        }
+        result
+    }
+
+    /// Number of dimensions of this set: 1 when non-empty, 0 when empty.
+    pub fn dim(&self) -> usize {
+        usize::from(!self.is_empty())
     }
 
     // -----------------------------------------------------------------------
@@ -391,6 +498,16 @@ impl RangeSet {
             .symmetric_difference(&other.elements)
             .cloned()
             .collect();
+    }
+
+    /// Check if this set is a subset of another.
+    pub fn is_subset(&self, other: &RangeSet) -> bool {
+        self.difference(other).is_empty()
+    }
+
+    /// Check if this set is a superset of another.
+    pub fn is_superset(&self, other: &RangeSet) -> bool {
+        other.is_subset(self)
     }
 
     // -----------------------------------------------------------------------
@@ -622,11 +739,66 @@ impl RangeSet {
         }
         result
     }
+
+    /// Reformat every element to the given zero-padding width.
+    ///
+    /// Mirrors the `RangeSet.padding` property setter; `None` (or a width
+    /// that is too small to keep a leading zero) drops the padding.
+    pub fn set_padding(&mut self, pad: Option<usize>) {
+        let pad = pad.unwrap_or(0);
+        self.elements = self
+            .elements
+            .iter()
+            .map(|si| {
+                let value: i64 = si.parse().unwrap_or(0);
+                if pad == 0 {
+                    format!("{}", value)
+                } else {
+                    format!("{:0>width$}", value, width = pad)
+                }
+            })
+            .collect();
+    }
+
+    /// Split the set into maximal contiguous sub-sets.
+    ///
+    /// Mirrors `RangeSet.contiguous()`, which uses the non-folding slice
+    /// iterator, so no autostep step-collapsing happens here.
+    pub fn contiguous(&self) -> Vec<RangeSet> {
+        self.slices_padding(AUTOSTEP_DISABLED)
+            .iter()
+            .map(|sli| {
+                let mut result = RangeSet::new();
+                result.add_range(sli.start, sli.stop, sli.step, sli.pad as u32);
+                result
+            })
+            .collect()
+    }
+
+    /// Contiguous/stepped slices as `(start, stop, step)` tuples, with
+    /// autostep folding applied. Padding is not carried over.
+    ///
+    /// Mirrors `RangeSet.slices()`.
+    pub fn slices(&self) -> Vec<(i64, i64, i64)> {
+        self.folded_slices()
+            .iter()
+            .map(|sli| (sli.start, sli.stop, sli.step))
+            .collect()
+    }
 }
 
 impl Default for RangeSet {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl PartialEq for RangeSet {
+    /// Compare element contents only, like `RangeSet.__eq__`, which is
+    /// `len(other) == len(self) and self.issubset(other)`. Autostep is a
+    /// display setting and does not take part in equality.
+    fn eq(&self, other: &Self) -> bool {
+        self.elements == other.elements
     }
 }
 
@@ -1237,5 +1409,460 @@ mod tests {
     fn test_remove_missing_panics() {
         let mut r1 = RangeSet::parse("1-100", None).unwrap();
         r1.remove_str("101");
+    }
+
+    // -----------------------------------------------------------------------
+    // Ports of upstream ClusterShell tests/RangeSetTest.py
+    //
+    // Each test below names the Python method it ports in its doc comment so
+    // harness/generate_test_mapping.py can pair them up.
+    // -----------------------------------------------------------------------
+
+    /// Python: testIsSuperSet
+    #[test]
+    fn test_is_superset() {
+        let r1 = RangeSet::parse("1-100,102,105-242,800", None).unwrap();
+        assert_eq!(r1.len(), 240);
+        let r2 = RangeSet::parse("3-98,140-199,800", None).unwrap();
+        assert_eq!(r2.len(), 157);
+        assert!(r1.is_superset(&r1));
+        assert!(r1.is_superset(&r2));
+
+        let r2 = RangeSet::parse("3-98,140-199,243,800", None).unwrap();
+        assert_eq!(r2.len(), 158);
+        assert!(!r1.is_superset(&r2));
+    }
+
+    /// Python: testIsSubSet
+    #[test]
+    fn test_is_subset() {
+        let r1 = RangeSet::parse("1-100,102,105-242,800-900/2", Some(3)).unwrap();
+        assert!(r1.is_subset(&r1));
+        assert!(r1.is_superset(&r1));
+
+        let empty = RangeSet::new();
+        assert!(empty.is_subset(&r1));
+        assert!(r1.is_superset(&empty));
+        assert!(!r1.is_subset(&empty));
+        assert!(!empty.is_superset(&r1));
+
+        let r2 = RangeSet::parse("3,800,802,804,888", Some(3)).unwrap();
+        assert!(r2.is_subset(&r2));
+        assert!(r2.is_subset(&r1));
+        assert!(r1.is_superset(&r2));
+        assert!(!r1.is_subset(&r2));
+        assert!(!r2.is_superset(&r1));
+
+        // fixed in v1.9 where mixed padding is now supported: "001-100" and
+        // "1-100" hold different elements even though they are numerically equal
+        let r1 = RangeSet::parse("1-100", Some(3)).unwrap();
+        let r2 = RangeSet::parse("001-100", Some(3)).unwrap();
+        assert!(!r1.is_subset(&r2));
+        assert!(r1 != r2);
+    }
+
+    /// Python: testGetItem
+    #[test]
+    fn test_get_item() {
+        let r1 = RangeSet::parse("1-100,102,105-242,800", None).unwrap();
+        assert_eq!(r1.len(), 240);
+        assert_eq!(r1.get(0).as_deref(), Some("1"));
+        assert_eq!(r1.get(1).as_deref(), Some("2"));
+        assert_eq!(r1.get(2).as_deref(), Some("3"));
+        assert_eq!(r1.get(99).as_deref(), Some("100"));
+        assert_eq!(r1.get(100).as_deref(), Some("102"));
+        assert_eq!(r1.get(101).as_deref(), Some("105"));
+        assert_eq!(r1.get(102).as_deref(), Some("106"));
+        assert_eq!(r1.get(103).as_deref(), Some("107"));
+        assert_eq!(r1.get(237).as_deref(), Some("241"));
+        assert_eq!(r1.get(238).as_deref(), Some("242"));
+        assert_eq!(r1.get(239).as_deref(), Some("800"));
+        // IndexError territory
+        assert_eq!(r1.get(240), None);
+        assert_eq!(r1.get(241), None);
+
+        // negative indices
+        assert_eq!(r1.get(-1).as_deref(), Some("800"));
+        assert_eq!(r1.get(-240).as_deref(), Some("1"));
+        for n in 1..(r1.len() as isize) {
+            assert_eq!(r1.get(-n), r1.get(r1.len() as isize - n));
+        }
+        assert_eq!(r1.get(-(r1.len() as isize) - 1), None);
+        assert_eq!(r1.get(-(r1.len() as isize) - 2), None);
+
+        let r2 = RangeSet::parse("1-37/3,43-52/3,58-67/3,73-100/3,102-106/2", Some(3)).unwrap();
+        assert_eq!(r2.len(), 34);
+        assert_eq!(r2.get(0).as_deref(), Some("1"));
+        assert_eq!(r2.get(1).as_deref(), Some("4"));
+        assert_eq!(r2.get(2).as_deref(), Some("7"));
+        assert_eq!(r2.get(12).as_deref(), Some("37"));
+        assert_eq!(r2.get(13).as_deref(), Some("43"));
+        assert_eq!(r2.get(14).as_deref(), Some("46"));
+        assert_eq!(r2.get(16).as_deref(), Some("52"));
+        assert_eq!(r2.get(17).as_deref(), Some("58"));
+        assert_eq!(r2.get(29).as_deref(), Some("97"));
+        assert_eq!(r2.get(30).as_deref(), Some("100"));
+        assert_eq!(r2.get(31).as_deref(), Some("102"));
+        assert_eq!(r2.get(32).as_deref(), Some("104"));
+        assert_eq!(r2.get(33).as_deref(), Some("106"));
+    }
+
+    /// Python: testGetSlice (the RangeSet.__getitem__ slice behaviour)
+    #[test]
+    fn test_get_slice() {
+        let r0 = RangeSet::parse("1-12", Some(3)).unwrap();
+        assert_eq!(r0.slice(0, 3), RangeSet::parse("1-3", Some(3)).unwrap());
+        assert_eq!(r0.slice(2, 7), RangeSet::parse("3-7", Some(3)).unwrap());
+        // negative start, stop clamped at 0
+        assert!(r0.slice(-1, 0).is_empty());
+        assert!(r0.slice(-2, 0).is_empty());
+        assert!(r0.slice(-11, 0).is_empty());
+        assert!(r0.slice(-12, 0).is_empty());
+        assert!(r0.slice(-13, 0).is_empty());
+        assert!(r0.slice(-1000, 0).is_empty());
+        assert_eq!(
+            r0.slice(-1, isize::MAX),
+            RangeSet::parse("12", Some(3)).unwrap()
+        );
+        // the slice keeps the parent's autostep, like the Python version
+        let parent = RangeSet::parse("1-12", Some(2)).unwrap();
+        assert_eq!(parent.slice(0, 4).autostep(), Some(2));
+    }
+
+    /// Python: testSplit
+    #[test]
+    fn test_split() {
+        // Empty rangeset
+        assert_eq!(RangeSet::new().split(2).len(), 0);
+        // Not enough elements
+        assert_eq!(
+            RangeSet::parse("1", Some(3)).unwrap().split(2),
+            vec![RangeSet::parse("1", Some(3)).unwrap()]
+        );
+        // Exact number of elements
+        assert_eq!(
+            RangeSet::parse("1-6", Some(3)).unwrap().split(3),
+            vec![
+                RangeSet::parse("1-2", Some(3)).unwrap(),
+                RangeSet::parse("3-4", Some(3)).unwrap(),
+                RangeSet::parse("5-6", Some(3)).unwrap(),
+            ]
+        );
+        // More splits than elements: capped at len(self) sub-sets
+        for i in [4, 5] {
+            assert_eq!(
+                RangeSet::parse("0-3", Some(3)).unwrap().split(i),
+                vec![
+                    RangeSet::parse("0", Some(3)).unwrap(),
+                    RangeSet::parse("1", Some(3)).unwrap(),
+                    RangeSet::parse("2", Some(3)).unwrap(),
+                    RangeSet::parse("3", Some(3)).unwrap(),
+                ]
+            );
+        }
+    }
+
+    /// Python: testClear
+    #[test]
+    fn test_clear() {
+        let mut r1 = RangeSet::parse("1-100,102,105-242,800", None).unwrap();
+        assert_eq!(r1.len(), 240);
+        assert_eq!(r1.to_string(), "1-100,102,105-242,800");
+        r1.clear();
+        assert_eq!(r1.len(), 0);
+        assert_eq!(r1.to_string(), "");
+    }
+
+    /// Python: testConstructorIterate
+    #[test]
+    fn test_constructor_iterate() {
+        // from list
+        let mut rgs = RangeSet::from_strings(["3", "5", "6", "7", "8", "1"]).unwrap();
+        assert_eq!(rgs.to_string(), "1,3,5-8");
+        assert_eq!(rgs.len(), 6);
+        rgs.add_int(10, 0);
+        assert_eq!(rgs.to_string(), "1,3,5-8,10");
+        assert_eq!(rgs.len(), 7);
+
+        // from a RangeSet
+        let r1 = RangeSet::parse("1,3,5-8", None).unwrap();
+        let rgs = RangeSet::from_strings(r1.striter()).unwrap();
+        assert_eq!(rgs.to_string(), "1,3,5-8");
+        assert_eq!(rgs.len(), 6);
+        assert_eq!(rgs, r1);
+    }
+
+    /// Python: testFromListConstructor
+    #[test]
+    fn test_from_list_constructor() {
+        let rgs = RangeSet::from_strings(["3", "5-8", "1"]).unwrap();
+        assert_eq!(rgs.to_string(), "1,3,5-8");
+        assert_eq!(rgs.len(), 6);
+
+        let rgs = RangeSet::from_strings(
+            RangeSet::parse("3", None)
+                .unwrap()
+                .striter()
+                .chain(RangeSet::parse("5-8", None).unwrap().striter())
+                .chain(RangeSet::parse("1", None).unwrap().striter()),
+        )
+        .unwrap();
+        assert_eq!(rgs.to_string(), "1,3,5-8");
+        assert_eq!(rgs.len(), 6);
+    }
+
+    /// Python: testIterator
+    #[test]
+    fn test_iterator() {
+        let matches = ["1", "3", "4", "5", "6", "7", "8", "11"];
+        let rgs = RangeSet::from_strings(["11", "3", "5-8", "1", "4"]).unwrap();
+        let seen: Vec<String> = rgs.striter().collect();
+        assert_eq!(seen, matches);
+
+        // with padding: iteration still yields strings, never ints (true since v1.9)
+        let matches = ["001", "003", "004", "005", "006", "007", "008", "011"];
+        let rgs = RangeSet::from_strings(["011", "003", "005-008", "001", "004"]).unwrap();
+        let seen: Vec<String> = rgs.striter().collect();
+        assert_eq!(seen, matches);
+    }
+
+    /// Python: testStringIterator
+    #[test]
+    fn test_string_iterator() {
+        let matches = ["1", "3", "4", "5", "6", "7", "8", "11"];
+        let rgs = RangeSet::from_strings(["11", "3", "5-8", "1", "4"]).unwrap();
+        let seen: Vec<String> = rgs.striter().collect();
+        assert_eq!(seen, matches);
+
+        // with padding
+        let matches = ["001", "003", "004", "005", "006", "007", "008", "011"];
+        let rgs = RangeSet::from_strings(["011", "003", "005-008", "001", "004"]).unwrap();
+        let seen: Vec<String> = rgs.striter().collect();
+        assert_eq!(seen, matches);
+    }
+
+    /// Python: testEquality
+    #[test]
+    fn test_equality() {
+        assert_eq!(RangeSet::new(), RangeSet::new());
+        let rg1 = RangeSet::parse("1-4", None).unwrap();
+        let rg2 = RangeSet::parse("1-4", None).unwrap();
+        assert_eq!(rg1, rg2);
+        let rg3 = RangeSet::parse("2-5", None).unwrap();
+        assert_ne!(rg1, rg3);
+        // same elements, different spelling and different autostep
+        let rg4 = RangeSet::parse("1,2,3,4", None).unwrap();
+        assert_eq!(rg1, rg4);
+        let rg4 = RangeSet::parse("1,2,3,4", Some(2)).unwrap();
+        assert_eq!(rg1, rg4);
+        let rg5 = RangeSet::parse("1,2,4", None).unwrap();
+        assert_ne!(rg1, rg5);
+    }
+
+    /// Python: testSlices
+    #[test]
+    fn test_slices() {
+        let r1 = RangeSet::new();
+        assert_eq!(r1.len(), 0);
+        assert_eq!(r1.slices(), vec![]);
+
+        // Without autostep
+        let r1 = RangeSet::parse("1-7/2,8-12,3000-3019", None).unwrap();
+        assert_eq!(r1.autostep(), None);
+        assert_eq!(r1.len(), 29);
+        assert_eq!(
+            r1.slices(),
+            vec![(1, 2, 1), (3, 4, 1), (5, 6, 1), (7, 13, 1), (3000, 3020, 1)]
+        );
+
+        // With autostep
+        let r1 = RangeSet::parse("1-7/2,8-12,3000-3019", Some(2)).unwrap();
+        assert_eq!(r1.len(), 29);
+        assert_eq!(r1.autostep(), Some(2));
+        assert_eq!(r1.slices(), vec![(1, 8, 2), (8, 13, 1), (3000, 3020, 1)]);
+    }
+
+    /// Python: test_contiguous
+    #[test]
+    fn test_contiguous() {
+        let r0 = RangeSet::new();
+        assert_eq!(r0.contiguous().len(), 0);
+        let r1 = RangeSet::parse("1,3-9,14-21,30-39,42", Some(3)).unwrap();
+        let parts: Vec<String> = r1.contiguous().iter().map(|rs| rs.to_string()).collect();
+        assert_eq!(parts, ["1", "3-9", "14-21", "30-39", "42"]);
+    }
+
+    /// Python: test_dim
+    #[test]
+    fn test_dim() {
+        assert_eq!(RangeSet::new().dim(), 0);
+        assert_eq!(RangeSet::parse("1-10,15-20", Some(3)).unwrap().dim(), 1);
+    }
+
+    /// Python: test_strip_whitespaces
+    #[test]
+    fn test_strip_whitespaces() {
+        // whitespaces around and inside subranges
+        for input in [
+            " 1,5,39-42,100",
+            "1 ,5,39-42,100",
+            "1, 5,39-42,100",
+            "1,5 ,39-42,100",
+            "1,5, 39-42,100",
+            "1,5,39-42 ,100",
+            "1,5,39-42, 100",
+            "1,5,39-42,100 ",
+            " 1 ,5,39-42,100",
+            "1 , 5 , 39-42 , 100",
+            " 1 , 5 , 39-42 , 100 ",
+        ] {
+            test_rs(input, "1,5,39-42,100", 7);
+        }
+
+        // whitespaces within ranges
+        test_rs("1 - 2", "1-2", 2);
+        for input in [
+            "01 - 02",
+            "01- 02",
+            "01 -02",
+            " 01-02",
+            " 01 -02",
+            " 01 - 02",
+            " 01 - 02 ",
+            "01 - 02 ",
+            "01- 02 ",
+            "01-02 ",
+        ] {
+            test_rs(input, "01-02", 2);
+        }
+
+        // stepped ranges with whitespaces
+        for (input, expected, len) in [
+            ("0-8/2", "0-8/2", 5),
+            ("0-8 /2", "0-8/2", 5),
+            ("0-8/ 2", "0-8/2", 5),
+            ("0-8 / 2", "0-8/2", 5),
+            ("0 -8 / 2", "0-8/2", 5),
+            ("0 - 8 / 2", "0-8/2", 5),
+            ("00-08/2", "00-08/2", 5),
+            ("00-08 /2", "00-08/2", 5),
+            ("00-08/ 2", "00-08/2", 5),
+            ("00-08 / 2", "00-08/2", 5),
+            ("1-7/2", "1-7/2", 4),
+            ("1-7 /2", "1-7/2", 4),
+            ("1-7/ 2", "1-7/2", 4),
+            ("1-7 / 2", "1-7/2", 4),
+            ("1 -7 / 2", "1-7/2", 4),
+            ("1 - 7 / 2", "1-7/2", 4),
+            ("01-07/2", "01-07/2", 4),
+            ("01-07 /2", "01-07/2", 4),
+            ("01-07/ 2", "01-07/2", 4),
+            ("01-07 / 2", "01-07/2", 4),
+        ] {
+            test_rs(input, expected, len);
+        }
+
+        // invalid patterns
+        for input in [
+            " 0 0",
+            " 1 2",
+            "0 1",
+            "0 1 ",
+            "1,5,39-42,10 0",
+            "1,5,39-42,12 3,300",
+            "1,5,",
+            "1,5, ",
+            "1,5,, ",
+        ] {
+            assert!(
+                RangeSet::parse(input, Some(3)).is_err(),
+                "expected parse error for {:?}",
+                input
+            );
+        }
+    }
+
+    /// Python: test_init_ranges
+    #[test]
+    fn test_init_ranges() {
+        let r1 = RangeSet::from_range(5, 7);
+        assert_eq!(r1.to_string(), "5-6");
+        assert_eq!(r1.len(), 2);
+    }
+
+    /// Python: test_init_negative_ranges (GH#515)
+    #[test]
+    fn test_init_negative_ranges() {
+        let r1 = RangeSet::from_range(-1, 1);
+        assert_eq!(r1.to_string(), "-1-0");
+        assert_eq!(r1.len(), 2);
+
+        let r1 = RangeSet::parse("-1-0", None).unwrap();
+        assert_eq!(r1.to_string(), "-1-0");
+        assert_eq!(r1.len(), 2);
+
+        let r1 = RangeSet::from_range(-5, 7);
+        assert_eq!(r1.to_string(), "-5-6");
+        assert_eq!(r1.len(), 12);
+
+        let r1 = RangeSet::parse("-5-6", None).unwrap();
+        assert_eq!(r1.to_string(), "-5-6");
+        assert_eq!(r1.len(), 12);
+    }
+
+    /// Python: test_mixed_padding_mismatch
+    #[test]
+    fn test_mixed_padding_mismatch() {
+        for input in [
+            "1-044",
+            "01-044",
+            "001-44",
+            "0-9,1-044",
+            "0-9,01-044",
+            "0-9,001-44",
+            "030-032,033-99/3,100",
+        ] {
+            assert!(
+                RangeSet::parse(input, Some(3)).is_err(),
+                "expected padding mismatch error for {:?}",
+                input
+            );
+        }
+    }
+
+    /// Python: test_padding_property_compat
+    #[test]
+    fn test_padding_property_compat() {
+        let mut r0 = RangeSet::parse("0-10,15-20", Some(3)).unwrap();
+        assert_eq!(r0.padding(), None);
+        r0.set_padding(Some(1));
+        assert_eq!(r0.padding(), None);
+        assert_eq!(r0.to_string(), "0-10,15-20");
+        r0.set_padding(Some(2));
+        assert_eq!(r0.padding(), Some(2));
+        assert_eq!(r0.to_string(), "00-10,15-20");
+        r0.set_padding(Some(3));
+        assert_eq!(r0.padding(), Some(3));
+        assert_eq!(r0.to_string(), "000-010,015-020");
+        // reset padding using None is allowed
+        r0.set_padding(None);
+        assert_eq!(r0.padding(), None);
+        assert_eq!(r0.to_string(), "0-10,15-20");
+    }
+
+    /// Python: testDiscard
+    #[test]
+    fn test_discard() {
+        let mut r1 = RangeSet::parse("1-100,102,105-242,800", None).unwrap();
+        assert_eq!(r1.len(), 240);
+        r1.discard_str("100");
+        assert_eq!(r1.len(), 239);
+        assert_eq!(r1.to_string(), "1-99,102,105-242,800");
+        r1.discard_str("101"); // should not raise
+        r1.discard_str("105");
+        assert_eq!(r1.len(), 238);
+        assert_eq!(r1.to_string(), "1-99,102,106-242,800");
+        r1.discard_str("foo"); // never present, still a no-op
+        assert_eq!(r1.len(), 238);
     }
 }

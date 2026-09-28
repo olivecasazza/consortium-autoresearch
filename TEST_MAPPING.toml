@@ -366,34 +366,34 @@ testSimple = ["range_set::tests::test_simple"]
 testStepSimple = ["range_set::tests::test_step_simple"]
 testStepAdvanced = ["range_set::tests::test_step_advanced"]
 test_bad_syntax = ["range_set::tests::test_bad_syntax"]
-testIntersectSimple = []
-testIntersectStep = []
-testSubSimple = []
+testIntersectSimple = ["range_set::tests::test_intersection", "range_set::tests::test_intersection_complex"]
+testIntersectStep = ["range_set::tests::test_intersection_step"]
+testSubSimple = ["range_set::tests::test_difference", "range_set::tests::test_difference_bounds"]
 testSymmetricDifference = ["range_set::tests::test_symmetric_difference"]
-testSubStep = []
+testSubStep = ["range_set::tests::test_diff_step", "range_set::tests::test_diff_step_complex"]
 testContains = ["range_set::tests::test_contains"]
-testIsSuperSet = []
-testIsSubSet = []
-testGetItem = []
-testGetSlice = []
-testSplit = []
+testIsSuperSet = ["range_set::tests::test_is_superset"]
+testIsSubSet = ["range_set::tests::test_is_subset"]
+testGetItem = ["range_set::tests::test_get_item"]
+testGetSlice = ["range_set::tests::test_get_slice"]
+testSplit = ["range_set::tests::test_split"]
 testAdd = ["range_set::tests::test_add_range_api", "range_set::tests::test_add_range_bounds", "range_set::tests::test_add_remove"]
 testUpdate = ["range_set::tests::test_update_complex"]
 testUnion = ["range_set::tests::test_union"]
 testRemove = ["range_set::tests::test_remove_and_discard", "range_set::tests::test_remove_missing_panics"]
-testDiscard = []
-testClear = []
-testConstructorIterate = []
-testFromListConstructor = []
+testDiscard = ["range_set::tests::test_discard"]
+testClear = ["range_set::tests::test_clear"]
+testConstructorIterate = ["range_set::tests::test_constructor_iterate"]
+testFromListConstructor = ["range_set::tests::test_from_list_constructor"]
 testFromOneConstructor = []
-testIterator = []
-testStringIterator = []
+testIterator = ["range_set::tests::test_iterator"]
+testStringIterator = ["range_set::tests::test_string_iterator"]
 testBinarySanityCheck = []
 testBinarySanityCheckNotImplementedSubtle = []
 testIsSubSetError = []
-testEquality = []
+testEquality = ["range_set::tests::test_equality"]
 testAddRange = ["range_set::tests::test_add_range_api", "range_set::tests::test_add_range_bounds"]
-testSlices = []
+testSlices = ["range_set::tests::test_slices"]
 testCopy = ["range_set::tests::test_copy"]
 test_unpickle_v1_3_py24 = []
 test_unpickle_v1_3_py26 = []
@@ -410,16 +410,15 @@ test_ior = ["range_set::tests::test_ior"]
 test_iand = ["range_set::tests::test_iand"]
 test_ixor = ["range_set::tests::test_ixor"]
 test_isub = ["range_set::tests::test_isub"]
-test_contiguous = []
-test_dim = []
+test_contiguous = ["range_set::tests::test_contiguous"]
+test_dim = ["range_set::tests::test_dim"]
 test_intiter = ["range_set::tests::test_intiter"]
 test_mixed_padding = ["range_set::tests::test_mixed_padding"]
-test_mixed_padding_mismatch = []
-test_padding_property_compat = []
-test_strip_whitespaces = []
-test_init_ranges = []
-test_init_negative_ranges = []
-
+test_mixed_padding_mismatch = ["range_set::tests::test_mixed_padding_mismatch"]
+test_padding_property_compat = ["range_set::tests::test_padding_property_compat"]
+test_strip_whitespaces = ["range_set::tests::test_strip_whitespaces"]
+test_init_ranges = ["range_set::tests::test_init_ranges"]
+test_init_negative_ranges = ["range_set::tests::test_init_negative_ranges"]
 [StreamTest]
 test_001_empty = []
 test_002_pipe_readers = []
@@ -584,6 +583,11 @@ test_channel_ctl_shell_wrloc1 = []
 test_channel_ctl_shell_wrloc2 = []
 test_channel_ctl_shell_mwrloc1 = []
 
+[TreeGatewayTimeoutTest]
+test_pchannel_uses_connect_timeout = []
+test_pchannel_timeout_none_when_connect_timeout_zero = []
+test_propagation_channel_invalidates_timeout_on_start = []
+
 [TreeTaskTest]
 test_shell_auto_tree_dummy = []
 test_shell_auto_tree_noconf = []
@@ -666,32 +670,376 @@ test_list_group = []
 
 [_extra_rust_tests]
 # Rust tests with no direct Python counterpart (extra coverage)
+# communication::tests::test_base64_empty
+# communication::tests::test_base64_padding
+# communication::tests::test_base64_roundtrip
+# communication::tests::test_base64_with_newlines
+# communication::tests::test_channel_creation
+# communication::tests::test_channel_feed_and_receive
+# communication::tests::test_channel_init_xml
+# communication::tests::test_channel_open_close_xml
+# communication::tests::test_channel_outbox_ordering
+# communication::tests::test_channel_send
+# communication::tests::test_data_decode_no_data
+# communication::tests::test_data_encode_decode
+# communication::tests::test_data_update
+# communication::tests::test_data_update_unexpected
+# communication::tests::test_from_attrs_missing_srcid
+# communication::tests::test_from_attrs_missing_type
+# communication::tests::test_message_display
+# communication::tests::test_message_has_payload
+# communication::tests::test_message_idents
+# communication::tests::test_message_nodes
+# communication::tests::test_message_srcid
+# communication::tests::test_xml_ack
+# communication::tests::test_xml_configuration_with_payload
+# communication::tests::test_xml_control
+# communication::tests::test_xml_error
+# communication::tests::test_xml_escape
+# communication::tests::test_xml_retcode
+# communication::tests::test_xml_roundtrip_ack
+# communication::tests::test_xml_roundtrip_cfg_with_data
+# communication::tests::test_xml_roundtrip_error
+# communication::tests::test_xml_roundtrip_retcode
+# communication::tests::test_xml_routing
+# communication::tests::test_xml_special_characters_roundtrip
+# communication::tests::test_xml_unescape
+# communication::tests::test_xmlreader_ack_message
+# communication::tests::test_xmlreader_channel_start_end
+# communication::tests::test_xmlreader_control
+# communication::tests::test_xmlreader_error_message
+# communication::tests::test_xmlreader_incremental_feed
+# communication::tests::test_xmlreader_message_with_payload
+# communication::tests::test_xmlreader_retcode
+# communication::tests::test_xmlreader_routing
+# communication::tests::test_xmlreader_stdout_stderr
+# communication::tests::test_xmlreader_timeout
+# communication::tests::test_xmlreader_unknown_type
+# crates/consortium/src/dag/builder.rs - dag::builder::DagBuilder (line 17)
+# crates/consortium/src/dag/builder.rs - dag::builder::StageBuilder (line 139)
+# crates/consortium/src/dag/mod.rs - dag (line 16)
+# crates/consortium/src/engine/mod.rs - engine::Engine (line 506)
+# crates/consortium/src/node_set.rs - node_set::NodeSet (line 778)
+# crates/consortium/src/node_set.rs - node_set::expand (line 952)
+# crates/consortium/src/node_set.rs - node_set::fold (line 964)
+# crates/consortium/src/task.rs - task (line 11)
+# dag::context::tests::test_context_clone_shares_state
+# dag::context::tests::test_missing_output
+# dag::context::tests::test_output_roundtrip
+# dag::context::tests::test_state_roundtrip
+# dag::executor::tests::test_concurrency_group_limit
+# dag::executor::tests::test_concurrency_limit_different_groups
+# dag::executor::tests::test_concurrency_limit_proven_by_max_concurrent
+# dag::executor::tests::test_continue_independent_on_failure
+# dag::executor::tests::test_dependencies_prevent_early_execution
+# dag::executor::tests::test_dependency_ordering
+# dag::executor::tests::test_dependency_ordering_with_high_parallelism
+# dag::executor::tests::test_output_passing_between_tasks
+# dag::executor::tests::test_parallel_independent_tasks
+# dag::executor::tests::test_parallelism_proven_by_overlapping_execution
+# dag::executor::tests::test_pipelining_proven_by_stage_overlap
+# dag::executor::tests::test_shell_task
+# dag::executor::tests::test_shell_task_failure
+# dag::executor::tests::test_single_task_failure
+# dag::executor::tests::test_single_task_success
+# dag::executor::tests::test_stage_builder_basic
+# dag::executor::tests::test_stage_builder_failure_cancels_later_stages
+# dag::executor::tests::test_stage_builder_per_host_pipelining
+# dag::graph::tests::test_cycle_detection
+# dag::graph::tests::test_deep_cycle
+# dag::graph::tests::test_diamond_dag
+# dag::graph::tests::test_duplicate_task
+# dag::graph::tests::test_empty_dag
+# dag::graph::tests::test_large_dag_performance
+# dag::graph::tests::test_linear_chain
+# dag::graph::tests::test_self_loop_cycle
+# dag::graph::tests::test_single_task
+# dag::graph::tests::test_unknown_dep
+# dag::pool::tests::test_dynamic_pool_add_remove
+# dag::pool::tests::test_dynamic_pool_global
+# dag::pool::tests::test_dynamic_pool_tags
+# dag::pool::tests::test_fixed_pool
+# dag::pool::tests::test_unlimited_pool
+# defaults::tests::test_config_paths_basic
+# defaults::tests::test_config_paths_with_cfgdir
+# defaults::tests::test_config_paths_with_xdg
+# defaults::tests::test_config_value_accessors
+# defaults::tests::test_defaults_default_trait
+# defaults::tests::test_defaults_have_correct_values
+# defaults::tests::test_from_config_empty_paths
+# defaults::tests::test_from_config_with_ini_file
+# defaults::tests::test_get_unknown_attribute
+# defaults::tests::test_multiple_config_files_override
+# defaults::tests::test_parse_bool_variants
+# defaults::tests::test_parse_int_tuple_empty
+# defaults::tests::test_port_qlimit_compat
+# defaults::tests::test_set_attribute
+# defaults::tests::test_set_unknown_attribute
+# engine::tests::test_engine_abort
+# engine::tests::test_engine_add_remove_client
+# engine::tests::test_engine_add_timer
+# engine::tests::test_engine_base_timer
+# engine::tests::test_engine_constants
+# engine::tests::test_engine_creation
+# engine::tests::test_engine_error_types
+# engine::tests::test_engine_evloop_refcnt
+# engine::tests::test_engine_fire_timers
+# engine::tests::test_engine_start_all_clients
+# engine::tests::test_engine_stop
+# engine::tests::test_engine_timer_creation
+# engine::tests::test_engine_timer_debug
+# engine::tests::test_engine_timer_fire_calls_handler
+# engine::tests::test_engine_timer_invalidate
+# engine::tests::test_engine_timer_with_autoclose
+# engine::tests::test_engine_update_client_events
+# engine::tests::test_null_backend_name
+# engine::tests::test_null_backend_register_modify_unregister
+# engine::tests::test_null_backend_wait_returns_empty
+# engine::tests::test_timer_queue_firing
+# engine::tests::test_timer_queue_invalidation
+# engine::tests::test_timer_queue_repeat
+# engine::tests::test_timer_queue_scheduling
+# event::tests::test_custom_overrides
+# event::tests::test_default_impls_callable
+# event::tests::test_object_safety
+# event::tests::test_send_sync
+# msg_tree::tests::test_add_multiple_keys_same_message
+# msg_tree::tests::test_add_multiple_lines_same_key
+# msg_tree::tests::test_add_single_key
+# msg_tree::tests::test_clear
+# msg_tree::tests::test_deep_tree
+# msg_tree::tests::test_get_message
+# msg_tree::tests::test_get_nonexistent_key
+# msg_tree::tests::test_keys_iterator
+# msg_tree::tests::test_mode_defer_to_shift
+# msg_tree::tests::test_mode_enum
 # msg_tree::tests::test_new_is_empty
+# msg_tree::tests::test_remove_keys
+# msg_tree::tests::test_shared_prefix
+# msg_tree::tests::test_trace_mode
+# msg_tree::tests::test_walk_trace_in_shift_mode_panics
+# msg_tree::tests::test_walk_with_different_messages
+# msg_tree::tests::test_walk_with_mapper
+# msg_tree::tests::test_walk_with_match_filter
+# node_set::tests::test_display_fold
+# node_set::tests::test_dotted_hostname_multiple
+# node_set::tests::test_dotted_hostname_single
+# node_set::tests::test_dotted_hostname_with_numbers
+# node_set::tests::test_empty_parse
+# node_set::tests::test_from_str
+# node_set::tests::test_ip_address_contains
+# node_set::tests::test_ip_address_different_subnets
+# node_set::tests::test_ip_address_multiple_same_subnet
+# node_set::tests::test_ip_address_single
+# node_set::tests::test_iter_sorted
+# node_set::tests::test_mdns_hostname
+# node_set::tests::test_mdns_hostname_comma_list
+# node_set::tests::test_missing_bracket_error
+# node_set::tests::test_multi_dimensional
+# node_set::tests::test_multi_pattern
 # node_set::tests::test_new_is_empty
-# range_set::tests::test_add_range_api
-# range_set::tests::test_add_range_bounds
-# range_set::tests::test_add_remove
-# range_set::tests::test_autostep_property
-# range_set::tests::test_diff_step
-# range_set::tests::test_diff_step_complex
-# range_set::tests::test_difference
-# range_set::tests::test_difference_bounds
+# node_set::tests::test_non_indexed_node
+# node_set::tests::test_parse_comma_separated
+# node_set::tests::test_parse_difference_operator
+# node_set::tests::test_parse_intersection_operator
+# node_set::tests::test_parse_multiple_ranges
+# node_set::tests::test_parse_padded
+# node_set::tests::test_parse_range
+# node_set::tests::test_parse_simple_node
+# node_set::tests::test_parse_xor_operator
+# node_set::tests::test_set_difference
+# node_set::tests::test_set_intersection
+# node_set::tests::test_set_symmetric_difference
+# node_set::tests::test_set_union
+# node_set::tests::test_subset_superset
+# node_set::tests::test_thunderbolt_hostname
+# node_set::tests::test_update_str
+# node_utils::tests::test_group_resolver_config_file_not_found
+# node_utils::tests::test_group_resolver_default_source
+# node_utils::tests::test_group_resolver_missing_default
+# node_utils::tests::test_group_resolver_missing_source
+# node_utils::tests::test_group_resolver_sources_from_ini
+# node_utils::tests::test_group_resolver_with_multiple_sources
+# node_utils::tests::test_illegal_chars_validation
+# node_utils::tests::test_static_group_source_basic_resolve
+# node_utils::tests::test_static_group_source_missing_group
+# node_utils::tests::test_static_group_source_reverse_lookup
+# node_utils::tests::test_static_group_source_with_all_and_list
+# node_utils::tests::test_upcall_source_no_upcall
+# node_utils::tests::test_upcall_source_with_map
+# node_utils::tests::test_whitespace_splitting
+# propagation::tests::test_channel_config_ack
+# propagation::tests::test_channel_creation
+# propagation::tests::test_channel_ev_close
+# propagation::tests::test_channel_ev_hup
+# propagation::tests::test_channel_recv_end
+# propagation::tests::test_channel_recv_error
+# propagation::tests::test_channel_recv_retcode
+# propagation::tests::test_channel_recv_routing
+# propagation::tests::test_channel_recv_stderr
+# propagation::tests::test_channel_recv_stdout
+# propagation::tests::test_channel_recv_timeout
+# propagation::tests::test_channel_results_accumulate
+# propagation::tests::test_channel_send_queue
+# propagation::tests::test_channel_shell_command
+# propagation::tests::test_channel_start
+# propagation::tests::test_channel_write_and_eof
+# propagation::tests::test_error_display
+# propagation::tests::test_router_creation
+# propagation::tests::test_router_dispatch_directly_connected
+# propagation::tests::test_router_dispatch_remote
+# propagation::tests::test_router_invalid_root
+# propagation::tests::test_router_load_balancing
+# propagation::tests::test_router_mark_unreachable
+# propagation::tests::test_router_next_hop
+# propagation::tests::test_router_same_source_dest
 # range_set::tests::test_empty
-# range_set::tests::test_intersection
-# range_set::tests::test_intersection_complex
-# range_set::tests::test_intersection_step
+# range_set::tests::test_is_subset
+# range_set::tests::test_is_superset
 # range_set::tests::test_large_range
 # range_set::tests::test_mixed_padding_with_different_widths
 # range_set::tests::test_padding
 # range_set::tests::test_padding_display
 # range_set::tests::test_padding_mismatch_errors
 # range_set::tests::test_padding_property
-# range_set::tests::test_remove_and_discard
-# range_set::tests::test_remove_missing_panics
 # range_set::tests::test_step_advanced_more
 # range_set::tests::test_step_more_complex
-# range_set::tests::test_symmetric_difference_complex
-# range_set::tests::test_union_complex
-# range_set::tests::test_update_complex
+# task::tests::test_gathering_handler_chains_user_handler
+# task::tests::test_gathering_handler_collects_retcodes
+# task::tests::test_gathering_handler_collects_stderr
+# task::tests::test_gathering_handler_collects_stdout
+# task::tests::test_gathering_handler_collects_timeouts
+# task::tests::test_get_short_hostname
+# task::tests::test_task_abort
+# task::tests::test_task_default
+# task::tests::test_task_default_tree_disabled
+# task::tests::test_task_defaults_default
+# task::tests::test_task_defaults_from_defaults
+# task::tests::test_task_defaults_mut
+# task::tests::test_task_error_display
+# task::tests::test_task_error_from_worker_error
+# task::tests::test_task_flush_buffers
+# task::tests::test_task_from_defaults
+# task::tests::test_task_info_default
+# task::tests::test_task_info_from_defaults
+# task::tests::test_task_info_mut
+# task::tests::test_task_iter_retcodes_by_worker
+# task::tests::test_task_iter_retcodes_with_filter
+# task::tests::test_task_new
+# task::tests::test_task_node_buffer_disabled
+# task::tests::test_task_node_buffer_empty
+# task::tests::test_task_node_error_empty
+# task::tests::test_task_node_retcode
+# task::tests::test_task_reset_between_runs
+# task::tests::test_task_run_command_convenience
+# task::tests::test_task_run_failing_command
+# task::tests::test_task_run_local_command
+# task::tests::test_task_run_mixed_retcodes
+# task::tests::test_task_run_multiple_nodes
+# task::tests::test_task_run_returns_retcode
+# task::tests::test_task_run_with_timeout
+# task::tests::test_task_set_fanout
+# task::tests::test_task_shell_local
+# task::tests::test_task_shell_multiple
+# task::tests::test_task_shell_remote
+# task::tests::test_task_shell_with_opts
+# task::tests::test_task_state_clone_copy
+# task::tests::test_task_state_debug
+# task::tests::test_task_state_variants
+# task::tests::test_task_topology_none_by_default
+# task::tests::test_task_with_config
+# task::tests::test_task_with_custom_handler
+# task::tests::test_task_worker_accessor
+# task::tests::test_task_worker_retcodes_accessor
+# topology::tests::test_graph_bad_link
+# topology::tests::test_graph_basic
+# topology::tests::test_graph_big_groups
+# topology::tests::test_graph_invalid_root
+# topology::tests::test_graph_multiple_routes
+# topology::tests::test_graph_overlapping_routes
+# topology::tests::test_graph_to_tree
+# topology::tests::test_node_string_topology
+# topology::tests::test_nodegroup_add_child
+# topology::tests::test_nodegroup_clear_child
+# topology::tests::test_nodegroup_clear_children
+# topology::tests::test_nodegroup_display
+# topology::tests::test_parser_basic
+# topology::tests::test_parser_big_tree
+# topology::tests::test_parser_convergent_paths
+# topology::tests::test_parser_deep_tree
+# topology::tests::test_parser_invalid_file
+# topology::tests::test_parser_long_syntax
+# topology::tests::test_parser_main_compat
+# topology::tests::test_parser_multiple_admin_groups
+# topology::tests::test_parser_short_syntax
+# topology::tests::test_route_basic
+# topology::tests::test_route_display
+# topology::tests::test_route_overlap_error
+# topology::tests::test_routing_table_basic
+# topology::tests::test_routing_table_circular_ref
+# topology::tests::test_routing_table_convergent_paths
+# topology::tests::test_routing_table_display
+# topology::tests::test_tree_counts
+# topology::tests::test_tree_empty_display
+# topology::tests::test_tree_iteration
+# topology::tests::test_tree_printing
+# worker::exec::tests::test_exec_worker_abort
+# worker::exec::tests::test_exec_worker_all_nodes_produce_output
+# worker::exec::tests::test_exec_worker_creation
+# worker::exec::tests::test_exec_worker_fanout
+# worker::exec::tests::test_exec_worker_multiple_nodes
+# worker::exec::tests::test_exec_worker_read_fds
+# worker::exec::tests::test_exec_worker_simple_echo
+# worker::exec::tests::test_exec_worker_with_handler
+# worker::exec::tests::test_exec_worker_with_stderr
+# worker::exec::tests::test_exec_worker_with_timeout
+# worker::exec::tests::test_exec_worker_write_fds
+# worker::exec::tests::test_node_substitution_braces
+# worker::exec::tests::test_node_substitution_percent_h
+# worker::ssh::tests::test_scp_options_with_control_master
+# worker::ssh::tests::test_scp_worker_creation
+# worker::ssh::tests::test_scp_worker_reverse
+# worker::ssh::tests::test_ssh_options_build_scp_cmd_forward
+# worker::ssh::tests::test_ssh_options_build_scp_cmd_recursive
+# worker::ssh::tests::test_ssh_options_build_scp_cmd_reverse
+# worker::ssh::tests::test_ssh_options_build_scp_cmd_with_user
+# worker::ssh::tests::test_ssh_options_build_ssh_cmd
+# worker::ssh::tests::test_ssh_options_build_ssh_cmd_custom_options
+# worker::ssh::tests::test_ssh_options_build_ssh_cmd_with_user
+# worker::ssh::tests::test_ssh_options_default
+# worker::ssh::tests::test_ssh_options_with_config_file
+# worker::ssh::tests::test_ssh_options_with_control_master
+# worker::ssh::tests::test_ssh_options_with_identity_file
+# worker::ssh::tests::test_ssh_options_with_port
+# worker::ssh::tests::test_ssh_options_with_proxy_jump
+# worker::ssh::tests::test_ssh_worker_abort
+# worker::ssh::tests::test_ssh_worker_creation
+# worker::ssh::tests::test_ssh_worker_custom_options
+# worker::ssh::tests::test_ssh_worker_with_stderr
+# worker::tests::test_event_handler_default_methods
+# worker::tests::test_event_handler_is_send
+# worker::tests::test_event_handler_object_safe
+# worker::tests::test_result_type_alias
+# worker::tests::test_worker_error_impls_display
+# worker::tests::test_worker_error_impls_error
+# worker::tests::test_worker_error_variants
+# worker::tests::test_worker_state_clone
+# worker::tests::test_worker_state_copy
+# worker::tests::test_worker_state_debug
+# worker::tests::test_worker_state_partial_eq
+# worker::tests::test_worker_state_variants
+# worker::tree::tests::test_tree_worker_abort
+# worker::tree::tests::test_tree_worker_active_gateways_empty
+# worker::tree::tests::test_tree_worker_config_default
+# worker::tree::tests::test_tree_worker_creation
+# worker::tree::tests::test_tree_worker_drain_events
+# worker::tree::tests::test_tree_worker_process_result_retcode
+# worker::tree::tests::test_tree_worker_process_result_stdout
+# worker::tree::tests::test_tree_worker_process_result_timeout
+# worker::tree::tests::test_tree_worker_record_direct_close
+# worker::tree::tests::test_tree_worker_record_direct_timeout
+# worker::tree::tests::test_tree_worker_routing_event
+# worker::tree::tests::test_tree_worker_start_without_router
+# worker::tree::tests::test_tree_worker_unique_ids
 
-# Summary: 582 Python tests, 37 mapped, 545 unmapped, 27 extra Rust tests
+# Summary: 585 Python tests, 41 mapped, 544 unmapped, 371 extra Rust tests
