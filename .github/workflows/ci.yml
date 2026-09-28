@@ -7,8 +7,16 @@ on:
       - 'doc/**'
       - 'README.md'
       - '.gitignore'
+  # CON-209: the `branches:` filter is gone. It restricted `pull_request` to
+  # the default branches, so any PR targeting a feature branch ran NO CI and
+  # reported nothing — `gh pr checks` prints "no checks reported on the
+  # '<branch>' branch", which reads as "nothing to see" rather than "no signal".
+  # This repo stacks PRs, so that left every stacked PR silently unverified
+  # against the trunk it is stacked on. Removing the filter makes a PR run CI
+  # against whatever same-repo branch it targets. It does not add duplicate
+  # runs: `pull_request` fires once per PR, and `push` above stays restricted
+  # to the default branches so a `master`-targeting PR is still built once.
   pull_request:
-    branches: [main, master]
   workflow_dispatch:
 
 # `checks: write` is required by mikepenz/action-junit-report. Without it the
@@ -74,11 +82,22 @@ jobs:
 
       # Regression guard for this issue: a swallow token (`|| true` /
       # `continue-on-error: true`) anywhere in ci.yml or migration-scorecard.yml
-      # must carry a `justified-guard:` comment, or CI goes red.
+      # must carry a `justified-guard:` comment, or CI goes red. The audit also
+      # refuses a `pull_request:` trigger restricted to `branches:` (CON-209) and
+      # a workflow retired by ADR (ADR 0002).
       - name: Audit test gates
         run: python3 harness/ci/check_test_gates.py
 
+      # The guard that cannot itself fail is the same defect it exists to catch,
+      # so the audit ships with tests. These are the first test step in this job,
+      # which makes every later test step reachable only behind a condition --
+      # the very rule `audit_unreachable_test_steps()` enforces, applied to
+      # ourselves rather than described in a comment.
+      - name: Run gate audit tests
+        run: python3 harness/ci/test_check_test_gates.py
+
       - name: Run unit tests
+        if: ${{ !cancelled() }}
         run: |
           cargo nextest run --workspace \
             --profile ci \

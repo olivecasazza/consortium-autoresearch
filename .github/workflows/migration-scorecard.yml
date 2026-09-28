@@ -8,8 +8,10 @@ on:
       - '.gitattributes'
       - 'doc/**'
       - 'README.md'
+  # CON-209: same fix as ci.yml. The `branches:` filter meant a PR targeting a
+  # feature branch got no scorecard at all, so the Rust and Python gates were
+  # absent rather than green on exactly the PRs most likely to break them.
   pull_request:
-    branches: [main, master, develop]
     paths-ignore:
       - '.gitignore'
       - '.gitattributes'
