@@ -185,7 +185,7 @@ pub struct CascadeCopyConfig<'a> {
     /// Per-edge `nix copy` timeout. Default 5min.
     pub timeout: Duration,
     /// Optional event sink for live UI. Use [`NullSink`] for headless.
-    /// Reused across all groups via a [`RemappingSink`] wrapper that
+    /// Reused across all groups via a `RemappingSink` wrapper that
     /// translates per-group local NodeIds into globally-unique ones.
     pub events: Option<&'a dyn EventSink>,
 }

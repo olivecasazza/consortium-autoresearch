@@ -1,8 +1,10 @@
 //! Production [`RoundExecutor`] implementations — wrap real `nix copy`
 //! subprocesses, runnable against actual nixlab hosts.
 //!
-//! [`NixCopyExecutor`] is the realistic counterpart to
-//! [`consortium_fanout_sim::DeterministicExecutor`]. The sim does
+//! [`NixCopyExecutor`] is the realistic counterpart to the sim's
+//! `consortium_fanout_sim::DeterministicExecutor`. (Plain text, not an
+//! intra-doc link: this crate does not depend on `consortium-fanout-sim`, so
+//! rustdoc has no path to resolve it against.) The sim does
 //! `closure_size / bandwidth + latency` math; this one shells out to
 //! `nix copy --no-check-sigs --to ssh-ng://user@host store_path` for
 //! every (src, tgt) edge in a round, in parallel via `std::thread`.

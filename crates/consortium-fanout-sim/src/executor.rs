@@ -1,7 +1,7 @@
 //! Deterministic [`RoundExecutor`] implementation.
 //!
 //! Computes per-edge duration from `closure_size / bandwidth + latency`,
-//! consults a [`FailureSchedule`](crate::fixtures::FailureSchedule) to
+//! consults a [`FailureSchedule`] to
 //! decide whether each edge succeeds or fails, and returns the result
 //! map the cascade coordinator expects.
 
