@@ -298,6 +298,16 @@ jobs:
       # cache action version and this defect cannot reappear per-runner.
       - name: Cache cargo
         uses: actions/cache@v5
+        # justified-guard: caching is an optimisation, not a gate. A cache
+        # step that can fail hard on a self-hosted runner will, under the
+        # default `success()` condition, take the rest of the job with it --
+        # which is precisely how this lane reported `failure` while running
+        # zero tests. A cold build is slower; a silently blind lane is
+        # worthless. `actions/cache@v5` still fails here in ~25s before the
+        # test step (run 36490660165, job 109158206049), so the launch problem
+        # is not the only way this step can fail, and neither is the cache
+        # service.
+        continue-on-error: true
         with:
           path: |
             ~/.cargo/registry
