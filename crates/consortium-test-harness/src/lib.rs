@@ -337,6 +337,16 @@ impl DockerCluster {
         self.run_in_node(node, "tc", &["qdisc", "show", "dev", iface])
     }
 
+    /// Crate-root directory this cluster generated its keys and compose file in.
+    pub fn work_dir(&self) -> &Path {
+        &self.docker_dir
+    }
+
+    /// The topology this cluster was started with.
+    pub fn topology(&self) -> &ClusterTopology {
+        &self.topology
+    }
+
     // ─── Internal ────────────────────────────────────────────────────────
 
     /// Clean up any stale consortium test containers from previous runs.

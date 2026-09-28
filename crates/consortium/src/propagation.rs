@@ -772,7 +772,6 @@ mod tests {
         let mut graph = TopologyGraph::new();
         let admin = NodeSet::parse("admin").unwrap();
         let gws = NodeSet::parse("gw[1-2]").unwrap();
-        let nodes = NodeSet::parse("node[1-8]").unwrap();
         graph.add_route(admin, gws).unwrap();
 
         // Each gw gets half the nodes
@@ -848,9 +847,8 @@ mod tests {
         // Send shell command
         ch.shell("node[1-4]", b"uname -a", 42);
 
-        // Should have outgoing message
-        let outgoing = ch.channel.take_outgoing().unwrap();
-        // skip the cfg message
+        // Skip the cfg message that comes first.
+        ch.channel.take_outgoing().unwrap();
         let outgoing2 = ch.channel.take_outgoing().unwrap();
         let xml = String::from_utf8(outgoing2).unwrap();
         assert!(xml.contains("type=\"CTL\""));
