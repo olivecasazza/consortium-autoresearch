@@ -24,8 +24,15 @@ Usage:
 
     (default)  audit the workflows CON-97 un-swallowed: ci.yml and
                migration-scorecard.yml
-    --all      audit every workflow in the directory, including
-               nosetests.yml, which is still fully swallowed upstream
+    --all      audit every workflow in the directory
+
+Two workflows are *retired* by decision (ADR 0002) and must not be
+reintroduced: `nosetests.yml`, the upstream ClusterShell mirror, and any
+attempt to bring it back fails the audit. The `pull_request:` trigger of every
+workflow is also audited: a `branches:` filter there means a PR targeting a
+feature branch runs no CI and reports nothing, which reads as "nothing to see"
+rather than "no signal". CON-209 removed those filters; this audit is what keeps
+them from coming back.
 
 Exit codes:
     0  every swallow token is justified (or there are none) and every
@@ -87,10 +94,33 @@ STEP_NAME = re.compile(r"^ {8}name:\s*(.*)$")
 STEP_IF = re.compile(r"^ {8}if:\s*(.*)$")
 CONTINUE_ON_ERROR = re.compile(r"^ {8}continue-on-error:\s*true\s*$")
 
-# Audited by default. `nosetests.yml` is the upstream ClusterShell mirror and is
-# still swallowed end to end; it is tracked by a separate follow-up rather than
-# being quietly folded into the CON-97 change.
+# Audited by default: the two workflows that are real gates.
 DEFAULT_WORKFLOWS = ("ci.yml", "migration-scorecard.yml")
+
+# Retired by decision, not by accident (ADR 0002). `nosetests.yml` was the
+# upstream ClusterShell mirror: it never synced upstream tests, never built the
+# consortium bindings, ran the suite under `|| true`, and was the last workflow
+# still restricted to default-branch `pull_request:` triggers. Retiring it
+# removes the last file that neither audit can pass. Reintroducing it is a
+# regression, so it is a hard error rather than a finding to be triaged.
+RETIRED_WORKFLOWS = {
+    "nosetests.yml": (
+        "retired by ADR 0002 - it is the upstream ClusterShell mirror, its suite "
+        "is already gated by migration-scorecard.yml (synced at a pinned ref, run "
+        "by pytest against both backends with fail_on_failure/require_tests), and "
+        "it can only ever exercise upstream ClusterShell's own Python. Restore the "
+        "Python matrix in migration-scorecard.yml instead."
+    ),
+}
+
+
+def audit_retired_workflows(target: Path) -> list[str]:
+    """Fail if a workflow retired by ADR is back in the directory."""
+    return [
+        f"{rel(target / name)}: {reason}"
+        for name, reason in sorted(RETIRED_WORKFLOWS.items())
+        if (target / name).exists()
+    ]
 
 
 def is_justified(lines: list[str], index: int) -> bool:
@@ -199,6 +229,38 @@ def audit_unreachable_test_steps(path: Path) -> list[str]:
     return problems
 
 
+PR_TRIGGER = re.compile(r"^ {2}pull_request:\s*$")
+PR_BRANCHES = re.compile(r"^ {4}branches:")
+
+
+def audit_pr_trigger(path: Path) -> list[str]:
+    """Flag a `pull_request:` trigger that is restricted to default branches.
+
+    Deliberately the same dumb indentation parsing as the rest of this file: it
+    only looks for a `pull_request:` key at the `on:` level followed by a
+    `branches:` key one level deeper, and never evaluates YAML.
+    """
+    problems: list[str] = []
+    lines = path.read_text(encoding="utf-8").splitlines()
+    for number, line in enumerate(lines):
+        if not PR_TRIGGER.match(line):
+            continue
+        # A `branches:` filter may sit directly under `pull_request:` or under a
+        # `paths-ignore:`-style sibling; scan the block that follows it.
+        probe = number + 1
+        while probe < len(lines) and (lines[probe].startswith("    ") or not lines[probe].strip()):
+            if PR_BRANCHES.match(lines[probe]):
+                problems.append(
+                    f"{rel(path)}:{probe + 1}: pull_request trigger is restricted to "
+                    f"branches -> PRs targeting a feature branch run no CI and report "
+                    f"nothing, which reads as 'nothing to see'. Drop the `branches:` "
+                    f"filter so a PR runs CI against whatever same-repo branch it targets."
+                )
+                break
+            probe += 1
+    return problems
+
+
 def main(argv: list[str]) -> int:
     args = [a for a in argv[1:] if a != "--all"]
     sweep_all = "--all" in argv[1:]
@@ -221,10 +283,18 @@ def main(argv: list[str]) -> int:
         print(f"::error::no workflow files under {target}")
         return 1
 
+    retired = audit_retired_workflows(target)
+    if retired:
+        print("::error::a workflow retired by ADR has been reintroduced.")
+        for problem in retired:
+            print(f"::error::{problem}")
+        return 1
+
     problems: list[str] = []
     for path in files:
         problems.extend(audit(path))
         problems.extend(audit_unreachable_test_steps(path))
+        problems.extend(audit_pr_trigger(path))
 
     if problems:
         print("::error::CI test/failure gates are swallowed or unreachable.")
