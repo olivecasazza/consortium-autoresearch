@@ -72,7 +72,7 @@ jobs:
         uses: taiki-e/install-action@nextest
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -185,7 +185,7 @@ jobs:
         uses: taiki-e/install-action@nextest
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -280,8 +280,24 @@ jobs:
             exit 1
           fi
 
+      # CON-97: `actions/cache@v4` declares `using: 'node20'`. These
+      # self-hosted NixOS runners ship the runner package from the nix store
+      # and do NOT contain `lib/externals/node20/bin/node` inside it, so the
+      # step dies at launch:
+      #   The template is not valid. .github/workflows/ci.yml (Line: 308,
+      #   Col: 16): An error occurred trying to start process
+      #   '.../github-runner-2.337.0/lib/externals/node20/bin/node' ...
+      #   No such file or directory
+      # (run 36472973163, job 109099567519, step 5 `Cache cargo`).
+      # A failed step takes every later step with it under GitHub's default
+      # `success()` condition, so `Run tool integration tests` never executed:
+      # the job reported `failure` while running ZERO tool tests. That is a
+      # swallowed lane wearing a red hat, not a test gate.
+      # `actions/cache@v5` is the same action on `node24`, which these runners
+      # do have. The ubuntu-latest jobs are bumped too so one repo pins one
+      # cache action version and this defect cannot reappear per-runner.
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -303,8 +319,15 @@ jobs:
           docker build -t consortium-nix-node -f tests/docker/Dockerfile.nix-node tests/docker/
           docker build -t consortium-ansible-node -f tests/docker/Dockerfile.ansible-node tests/docker/
 
-      # Same `-p consortium` defect as the docker job: zero tests ever ran here.
+      # The `-p consortium` -> `-p consortium-crate` repair is real on this job;
+      # only the comment above it was stale. It is kept so the next reader does
+      # not re-derive it.
+      # CON-97: `!cancelled()` so this step still executes when an earlier
+      # NON-test step in this job fails (cache, image build, ssh keys). Without
+      # it the job reports `failure` having run zero tests -- the same false red
+      # the cache fix above was caused by, one layer up.
       - name: Run tool integration tests
+        if: ${{ !cancelled() }}
         run: |
           cargo nextest run -p consortium-crate \
             --features docker-tests \
