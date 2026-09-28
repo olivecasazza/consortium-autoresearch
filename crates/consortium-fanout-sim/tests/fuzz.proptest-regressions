@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 57080ccf409818ce0115a11d18acf08064ba4ff7e02fdacb38c4294ba1ab4b8d # shrinks to seed = 1386639485, n_nodes = 32, bandwidth = Bimodal { slow: 21916614, fast: 138673762, fast_fraction: 0.06912536525592189 }, strategy_idx = 2, failure_seed = 4153256318798725350

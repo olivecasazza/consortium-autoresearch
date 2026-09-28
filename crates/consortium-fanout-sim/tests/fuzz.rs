@@ -214,34 +214,59 @@ proptest! {
         }
 
         // Tightened: when KillNodeAtRound was injected with round=0,
-        // the killed node MUST appear in the failure tree (it can never
-        // receive the closure since every attempt to copy to it fails
-        // from round 0). Older test was silent about this — would have
-        // passed even if the kill schedule was being ignored.
+        // the kill schedule must not be silently ignored. The invariant
+        // takes one of two shapes depending on whether the killed node
+        // is the pre-seeded coordinator:
+        //
+        // - `killed == NodeId(0)`: the seed already holds the closure
+        //   and is never a copy target, so `KillNodeAtRound{node: 0}`
+        //   matches no edge and is legitimately a no-op. The run must
+        //   succeed and the seed must be converged. (This is the case
+        //   the round==0 guard below used to get wrong — it asserted
+        //   the seed could never be converged, which is false.)
+        // - `killed != NodeId(0)`: a non-seed node that converged was
+        //   necessarily targeted by an edge, and every edge into it
+        //   fails from round 0, so it must NOT be converged and must
+        //   appear in the failure tree. If it converged anyway the kill
+        //   schedule is being ignored.
+        //
+        // `seed_fraction` is always 0.0 above, so the seed distribution
+        // is `SeedDistribution::Single` → the only pre-seeded node is
+        // NodeId(0).
         if let Some(killed) = killed_node {
-            // Only assert when the kill could actually have fired:
-            // round 0 means it fires on first attempt regardless of
-            // strategy. Round > 0 may not fire if the cascade halts
-            // before then (which is valid for Steiner on uniform).
-            // We check the schedule's round via re-extraction:
             if let FailureSchedule::KillNodeAtRound { round: 0, .. } = cfg.failures {
-                prop_assert!(
-                    !result.converged.iter().any(|&n| n == killed),
-                    "[{}] killed node {killed:?} still appears in converged set: {:?}",
-                    strategy.name(),
-                    result.converged,
-                );
-                let err = result.failed.as_ref().unwrap_or_else(|| {
-                    panic!(
-                        "[{}] killed node injected at round 0 but result.failed is None",
-                        strategy.name()
-                    )
-                });
-                prop_assert!(
-                    err.affected_nodes().contains(&killed),
-                    "[{}] killed node {killed:?} missing from affected set",
-                    strategy.name(),
-                );
+                if killed == NodeId(0) {
+                    // Kill-the-seed is a no-op: seeds are never targets.
+                    prop_assert!(
+                        result.is_success(),
+                        "[{}] killed node {killed:?} is the pre-seeded coordinator; killing it should be a harmless no-op but the run failed: {:?}",
+                        strategy.name(),
+                        result.failed,
+                    );
+                } else {
+                    // Only assert when the kill could actually have fired:
+                    // round 0 means it fires on first attempt regardless of
+                    // strategy. Round > 0 may not fire if the cascade halts
+                    // before then (which is valid for Steiner on uniform).
+                    // We check the schedule's round via re-extraction:
+                    prop_assert!(
+                        !result.converged.iter().any(|&n| n == killed),
+                        "[{}] killed node {killed:?} still appears in converged set: {:?}",
+                        strategy.name(),
+                        result.converged,
+                    );
+                    let err = result.failed.as_ref().unwrap_or_else(|| {
+                        panic!(
+                            "[{}] killed node injected at round 0 but result.failed is None",
+                            strategy.name()
+                        )
+                    });
+                    prop_assert!(
+                        err.affected_nodes().contains(&killed),
+                        "[{}] killed node {killed:?} missing from affected set",
+                        strategy.name(),
+                    );
+                }
             }
         }
     }
