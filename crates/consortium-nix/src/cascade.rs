@@ -527,8 +527,8 @@ impl<'a> Cascade<'a> {
 ///
 /// Realism is fully opt-in: a `NetworkBuilder::new().build()` produces
 /// an empty profile (no contention, no partitions, no per-edge specs)
-/// — same as today's default. Adding `.uplinks(...)` engages contention
-/// math automatically.
+/// — same as today's default. Adding `.uplinks_uniform(..)` (or `.nodes(..)`
+/// for per-node specs) engages contention math automatically.
 ///
 /// # Example
 ///
