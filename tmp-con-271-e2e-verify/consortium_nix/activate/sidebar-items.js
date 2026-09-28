@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["activate_all","activate_host"],"struct":["ActivationResults"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["ConfigError","DeployAction","ProfileType"],"struct":["AnsibleFleetConfig","Builder","DeploymentNode","DeploymentPlan","DeploymentTarget","FleetConfig","RayFleetConfig","RayWorkerGroup","SkypilotFleetConfig","SlurmFleetConfig","SlurmPartition"]};
