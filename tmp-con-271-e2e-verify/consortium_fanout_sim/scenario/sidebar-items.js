@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["compare_strategies"],"struct":["Scenario","ScenarioConfig"]};

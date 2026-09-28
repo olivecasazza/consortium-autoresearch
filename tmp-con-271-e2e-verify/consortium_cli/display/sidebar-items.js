@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["create_progress","finish_progress","print_gathered_header","print_line_with_label"],"struct":["ProgressHandler","ProgressState"]};

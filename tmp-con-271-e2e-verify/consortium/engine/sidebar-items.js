@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"constant":["EPSILON","E_READ","E_WRITE","FANOUT_UNLIMITED"],"enum":["EngineError"],"struct":["ClientId","Engine","EngineBaseTimer","EngineTimer","NullBackend","TimerId","TimerQueue"],"trait":["EngineClient","PollBackend"]};

@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["submit_job"],"mod":["error","tasks"]};

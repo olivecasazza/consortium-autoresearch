@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["ConfigValue"],"fn":["config_paths"],"static":["DEFAULTS"],"struct":["Defaults"]};

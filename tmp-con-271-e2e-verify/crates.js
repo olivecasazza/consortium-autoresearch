@@ -1,2 +1,0 @@
-window.ALL_CRATES = ["_consortium","cascade_copy","cascade_viz","cast","claw","consortium","consortium_ansible","consortium_cli","consortium_fanout_sim","consortium_nix","consortium_ray","consortium_skypilot","consortium_slurm","consortium_test_harness","molt","pinch"];
-//{"start":21,"fragment_lengths":[13,15,14,7,7,13,21,17,24,17,17,22,19,26,7,8]}

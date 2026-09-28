@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["cascade_copy_grouped","cascade_copy_unified"],"struct":["CascadeCopyConfig","CascadeCopyResult","CascadeCopyTarget"]};

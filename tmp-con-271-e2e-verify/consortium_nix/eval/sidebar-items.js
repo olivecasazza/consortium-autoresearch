@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["eval_all","eval_toplevel","evaluate","query_current_system"]};

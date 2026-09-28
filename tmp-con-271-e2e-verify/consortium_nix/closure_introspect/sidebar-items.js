@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["closure_of","shared_paths"]};

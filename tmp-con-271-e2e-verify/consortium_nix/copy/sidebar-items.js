@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["copy_closure","copy_closures","parallel_diff_copy"],"struct":["CopyResults"]};

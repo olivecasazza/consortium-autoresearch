@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"struct":["NixBuildJobEnvTask","NixCopyToSubmitTask","SlurmCollectTask","SlurmSubmitTask","SlurmWaitTask"]};

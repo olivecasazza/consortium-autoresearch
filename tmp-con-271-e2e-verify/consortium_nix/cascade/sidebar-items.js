@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["CascadeError"],"fn":["run_cascade","run_cascade_with_events"],"struct":["Cascade","CascadeNode","CascadePlan","CascadeResult","CascadeState","Log2FanOut","NetworkBuilder","NetworkProfile","NodeId","NodeIdAlloc","NodeSpec","RoundSnapshot"],"trait":["CascadeStrategy","RoundExecutor","TraceSink"]};
