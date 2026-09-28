@@ -1,17 +1,17 @@
 {
   "ref": "refs/heads/sync-upstream-1.10.1",
   "ref_type": "heads",
-  "sha": "0d16fd5623ff47958c6e30e3026dcc6e0d77c7a1",
-  "measured_at": "2026-09-27T05:18:30Z",
+  "sha": "ffd103a2906961d67d91978ca67aaed0f2baac37",
+  "measured_at": "2026-09-27T19:17:22Z",
   "host": "Linux 6.17.0-1022-azure x86_64",
   "metric_count": 6,
-  "notes": "measured on 36296769624",
+  "notes": "measured on 36343727084",
   "metrics": {
-    "perf_cascade.bimodal_256.log2-fanout": 2689069,
-    "perf_cascade.bimodal_256.max-bottleneck-spanning": 4379448,
-    "perf_cascade.bimodal_256.steiner-greedy": 2631717,
-    "perf_cascade.uniform_256.log2-fanout": 2473865,
-    "perf_cascade.uniform_256.max-bottleneck-spanning": 4153526,
-    "perf_cascade.uniform_256.steiner-greedy": 2444216
+    "perf_cascade.bimodal_256.log2-fanout": 4883408,
+    "perf_cascade.bimodal_256.max-bottleneck-spanning": 8131757,
+    "perf_cascade.bimodal_256.steiner-greedy": 4806981,
+    "perf_cascade.uniform_256.log2-fanout": 4624258,
+    "perf_cascade.uniform_256.max-bottleneck-spanning": 7702186,
+    "perf_cascade.uniform_256.steiner-greedy": 4583582
   }
 }
