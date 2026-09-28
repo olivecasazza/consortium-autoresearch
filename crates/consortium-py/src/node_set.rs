@@ -1,6 +1,6 @@
 //! PyO3 wrappers for consortium::node_set.
 
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyException, PyValueError};
 use pyo3::prelude::*;
 
 /// Python-visible NodeSet class.
@@ -10,6 +10,13 @@ pub struct PyNodeSet {
     inner: consortium::node_set::NodeSet,
 }
 
+pyo3::create_exception!(ClusterShell.NodeSet, NodeSetException, PyException);
+pyo3::create_exception!(ClusterShell.NodeSet, NodeSetError, NodeSetException);
+pyo3::create_exception!(ClusterShell.NodeSet, NodeSetExternalError, NodeSetError);
+// NodeSetParseError stays on PyValueError: it predates this hierarchy, and
+// re-basing it would break any caller doing `except ValueError`. Upstream
+// derives it from NodeSetError instead; that divergence is left for the
+// NodeSet port to settle, not smuggled in here.
 pyo3::create_exception!(ClusterShell.NodeSet, NodeSetParseError, PyValueError);
 
 #[pymethods]
@@ -73,5 +80,29 @@ impl PyNodeSet {
 /// Register node_set types into the parent module.
 pub fn register(parent: &Bound<'_, PyModule>) -> PyResult<()> {
     parent.add_class::<PyNodeSet>()?;
+    // The exception hierarchy was declared but never added to the module, so
+    // `from ClusterShell.NodeSet import NodeSetExternalError` raised
+    // ImportError. ClusterShell.CLI.Error imports exactly that name, which is
+    // why all five CLI test modules died at collection under the Rust backend.
+    // NodeSetParseError was also unreachable, so the NodeSet shim's
+    // `from ClusterShell._consortium import NodeSet, NodeSetParseError` probe
+    // failed and silently degraded to the pure-Python NodeSet.
+    for (name, ty) in [
+        (
+            "NodeSetException",
+            parent.py().get_type_bound::<NodeSetException>(),
+        ),
+        ("NodeSetError", parent.py().get_type_bound::<NodeSetError>()),
+        (
+            "NodeSetExternalError",
+            parent.py().get_type_bound::<NodeSetExternalError>(),
+        ),
+        (
+            "NodeSetParseError",
+            parent.py().get_type_bound::<NodeSetParseError>(),
+        ),
+    ] {
+        parent.add(name, ty)?;
+    }
     Ok(())
 }

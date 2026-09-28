@@ -183,16 +183,60 @@ jobs:
       # defect as a swallowed one: the signal never reaches the job conclusion.
       # `!cancelled()` keeps the step reachable after a sibling failure; it does not
       # mask anything, because its own exit code still decides the step conclusion.
+      #
+      # CON-116. This step used to die during *collection* on all 29 test modules
+      # with `ModuleNotFoundError: No module named 'ClusterShell.CLI'`, which
+      # CON-97's un-swallowing made visible for the first time.
+      #
+      # Cause, recorded because the obvious fix is the wrong one: the bindings
+      # package is *hybrid*, not a wholesale replacement for ClusterShell. Only
+      # RangeSet and NodeSet have a Rust implementation; every other module
+      # resolves to the upstream pure-Python source at lib/. __init__.py only did
+      # that path surgery for CONSORTIUM_BACKEND=python, so under `rust` the
+      # unported modules were not importable at all.
+      #
+      # Do NOT "fix" this with PYTHONPATH: ${{ github.workspace }}/lib the way
+      # the original-backend step above does. That puts lib/ at the *front* of
+      # sys.path, so lib/ClusterShell shadows the installed bindings package
+      # wholesale: ClusterShell._consortium becomes unimportable and the step
+      # labelled "Rust backend" silently runs the pure-Python backend. A step
+      # reporting on the wrong thing is worse than a red step. The bindings
+      # package extends its own __path__ instead, so a binding always wins and
+      # upstream only fills the gaps. LIB_CLUSTERSHELL just pins where "upstream"
+      # is, so the result does not depend on maturin having installed editable.
+      #
+      # Port status, measured against upstream v1.9.3 (761 tests collected, 8
+      # modules still failing to import): only RangeSet and NodeSet are ported,
+      # and both are partial. The 8 unimportable modules are all blocked on the
+      # same two gaps — the group-resolver API (std_group_resolver,
+      # set_std_group_resolver, set_std_group_resolver_config, expand, fold,
+      # grouplist, NodeSetBase) and RangeSetND:
+      #   CLI{Clubak,Lush,Config,Display,Nodeset}Test, NodeSetTest,
+      #   RangeSetNDTest, TreeTopologyTest
+      # They are left erroring rather than deselected — a collection error is a
+      # legitimate red, and hiding it is the defect CON-97 exists to stop. See
+      # CON-34 / CON-206 for the two unported features behind all 8.
+      #
+      # `--continue-on-collection-errors` is NOT a swallow, and is the opposite of
+      # one. pytest's default is to run *zero* tests when anything fails to
+      # collect, so those 8 modules were discarding the other 728 and the junit
+      # report said "8 tests run, 0 passed" — one un-importable module blinding
+      # the entire backend. With the flag, the 8 still fail the step (they are
+      # reported as errors and `fail_on_failure` still goes red) and the other
+      # 728 finally produce signal. The original-backend step collects 100% and
+      # does not need it.
       - name: Run Python tests (Rust backend)
         id: py_rust
         if: ${{ !cancelled() }}
         env:
           CONSORTIUM_BACKEND: rust
+          LIB_CLUSTERSHELL: ${{ github.workspace }}/lib
         run: |
           source .venv/bin/activate
           python -m pytest tests/ -v \
             --timeout=30 \
             --tb=short \
+            --continue-on-collection-errors \
             --junit-xml=results/python-rust.xml
 
       - name: Publish Python results (Rust backend)
