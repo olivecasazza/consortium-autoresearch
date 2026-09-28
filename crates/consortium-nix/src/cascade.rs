@@ -19,8 +19,13 @@
 //!   that pull in petgraph.
 //! - [`RoundExecutor`] is how we actually fire those edges. Production
 //!   wires it to `nix copy` (one subprocess per edge, std::thread for
-//!   in-round parallelism). Sim wires it to deterministic
-//!   bandwidth-driven `madsim::time::sleep`.
+//!   in-round parallelism). The simulator (`consortium-fanout-sim`)
+//!   implements the same trait without any I/O: it derives each
+//!   edge's cost as a [`Duration`] of pure arithmetic over
+//!   [`NetworkProfile`]'s bandwidth and latency, so a run is
+//!   deterministic given its seed. There is no virtual clock — a
+//!   virtual-clock executor would plug in here, but it is **not
+//!   implemented**.
 //! - [`run_cascade`] is the coordinator loop: ask strategy → dispatch
 //!   → record outcomes → repeat until convergence or no further
 //!   progress.
@@ -322,8 +327,10 @@ impl CascadeError {
 // ============================================================================
 
 /// Dispatches one round's worth of edges. Production: spawn one
-/// `nix copy` subprocess per edge via std::thread. Sim: madsim's task
-/// model + deterministic time.
+/// `nix copy` subprocess per edge via std::thread. The simulator
+/// keeps the same synchronous signature but does no I/O and sleeps
+/// for nothing: edge durations come from [`NetworkProfile`] as
+/// `Duration` data, making a run deterministic given its seed.
 ///
 /// Implementations must run all edges concurrently (no serial fallback)
 /// — the cascade's whole point is in-round parallelism.
