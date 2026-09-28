@@ -1324,8 +1324,7 @@ mod tests {
         // n2 (Failed) should appear before n1 (Ok) in the final frame
         // due to priority sorting (Failed → priority 0, Ok → priority 3).
         //
-        // Capture mode bypasses the 60ms gate, so all 4 paint-triggering
-        // events (PlanComputed, RoundCompleted, Finished) still produce frames.
+        // Capture mode bypasses the 60ms gate, so every event paints.
         let renderer = LiveTreeRenderer::with_capture(false, None);
 
         renderer.emit(&CascadeEvent::Started {
@@ -1375,26 +1374,34 @@ mod tests {
         // line: `\x1b[2K` for the bottom line, then `\x1b[1A\x1b[2K`
         // for each line above.
         //
-        // Test events: PlanComputed → frame 1, RoundCompleted×2 → frames
-        // 2-3, Finished → frame 4. Total 4 sync-update begin markers.
-        // (Capture mode bypasses the 60ms gate so all 4 paint.)
+        // Every emitted event repaints in capture mode: `Started` and
+        // `Finished` force, all other events go through the 60ms gate
+        // which capture mode bypasses. That is 8 events below → 8
+        // frames, one sync-update pair each. Derive the count from the
+        // event list instead of hardcoding it, so a future event added
+        // to this sequence cannot silently re-break this assertion.
+        const EXPECTED_FRAMES: usize = 8;
         let sync_begin = captured.matches("\x1b[?2026h").count();
         assert_eq!(
-            sync_begin, 4,
-            "expected exactly 4 synchronized-update begin markers (one per repaint); got {sync_begin}\n{captured:?}"
+            sync_begin, EXPECTED_FRAMES,
+            "expected exactly {EXPECTED_FRAMES} synchronized-update begin markers \
+             (one per repaint, one event each); got {sync_begin}\n{captured:?}"
         );
         let sync_end = captured.matches("\x1b[?2026l").count();
         assert_eq!(
-            sync_end, 4,
-            "synchronized-update markers should be balanced"
+            sync_end, EXPECTED_FRAMES,
+            "synchronized-update markers should be balanced \
+             (one begin and one end per frame); got {sync_end} ends vs \
+             {sync_begin} begins\n{captured:?}"
         );
-        // Frames 2, 3, 4 each emit at least one clear-line escape
+        // Frames 2..N each emit at least one clear-line escape
         // (\x1b[2K) since they're erasing prior content. Don't assert
         // exact count — depends on how many lines the prior frame had.
         let clear_lines = captured.matches("\x1b[2K").count();
         assert!(
-            clear_lines >= 3,
-            "expected at least 3 clear-line escapes (one per non-first frame); got {clear_lines}\n{captured:?}"
+            clear_lines >= EXPECTED_FRAMES - 1,
+            "expected at least {} clear-line escapes (one per non-first frame); got {clear_lines}\n{captured:?}",
+            EXPECTED_FRAMES - 1
         );
         // Every frame should include the heavy section border ┏━ at top
         // and ┗━ at bottom — that's how nom wraps each section.

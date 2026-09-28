@@ -1,130 +1,85 @@
-name: ClusterShell nosetests
+# ─────────────────────────────────────────────────────────────────────────────
+# RETIRED (CON-118). This workflow is no longer a test gate and must not become
+# one again. It is kept as a file, with its original `name:`, only so that the
+# program's evidence chain — which cites this workflow and its run history — does
+# not dangle. The runs below are in `.github/workflows/nosetests.yml` history on
+# GitHub and remain readable after this change.
+#
+# WHAT IT USED TO DO
+#   Upstream ClusterShell mirror: `pip install nose`, then
+#     nosetests -v --all-modules --with-coverage --cover-tests --cover-erase \
+#               --cover-package=ClusterShell tests || true
+#   across a Python 3.7–3.13 matrix, posting start/end notices to Slack.
+#
+# WHY IT WAS RETIRED RATHER THAN FIXED
+#   1. It duplicated a gate that already exists and does work. This workflow ran
+#      the root `tests/` directory (37 upstream ClusterShell test files).
+#      `migration-scorecard.yml` runs the *same* directory under pytest:
+#        - name: Run Python tests (original backend)
+#          working directory: repo root
+#          run: python -m pytest tests/ -v --timeout=30 --junit-xml=...
+#        - name: Run Python tests (Rust backend)
+#          working directory: repo root
+#          run: python -m pytest tests/ -v --timeout=30 --junit-xml=...
+#      Both run from the repository root. (The earlier `cd crates/consortium-py`
+#      belongs to the `maturin develop` build step, and each `run:` is its own
+#      shell, so that `cd` does not carry into the pytest steps.)
+#
+#   2. The runner could not have worked anyway. `nose` is unmaintained and
+#      incompatible with Python 3.10+ (`collections.Callable` was removed in
+#      3.10). The matrix asked for 3.7 through 3.13, so at most two of its seven
+#      legs were runnable. Its red runs therefore carried no test signal at all.
+#
+#   3. The `|| true` made the whole thing incapable of failing. Per CON-97 that
+#      is the defect class this repo exists to remove: a gate that cannot go red
+#      is worse than no gate, because it reads as coverage.
+#
+#   4. It posted to Slack channel C07GRMDK3, which belongs to the upstream CEA
+#      HPC organisation, gated on a `SLACK_BOT_TOKEN` this repository does not
+#      hold. Retiring it removes an outbound post into a third party's channel.
+#
+# THE SINGLE PYTHON GATE IS `migration-scorecard.yml`.
+#   Its JUnit report is published with `fail_on_failure: true`,
+#   `fail_on_parse_error: true` and `require_tests: true` (CON-97), so a failing
+#   Python test is red and an empty report is also red.
+#
+# HOW TO REVERSE THIS DECISION
+#   Do not restore this file as a gate. If the upstream ClusterShell suite needs
+#   a runner of its own, add it as another pytest invocation inside
+#   `migration-scorecard.yml` so there is exactly one Python gate, and re-run
+#   `python3 harness/ci/check_test_gates.py --all`.
+#
+# EVIDENCE
+#   harness/ci/check_test_gates.py --all, before this change:
+#     .github/workflows/nosetests.yml:67:  unguarded failure swallow -> continue-on-error: true
+#     .github/workflows/nosetests.yml:100: unguarded failure swallow -> nosetests ... || true
+#     .github/workflows/nosetests.yml:103: unguarded failure swallow -> continue-on-error: true
+#   after this change: clean. See CON-118 and PR for the full argument.
+# ─────────────────────────────────────────────────────────────────────────────
+name: ClusterShell nosetests (retired — see CON-118)
 
 on:
-  push:
-    branches: [main, master, develop]
-    paths-ignore:
-      - '.gitignore'
-      - '.gitattributes'
-      - 'doc/**'
-      - 'README.md'
-  pull_request:
-    branches: [main, master, develop]
-    paths-ignore:
-      - '.gitignore'
-      - '.gitattributes'
-      - 'doc/**'
-      - 'README.md'
-  merge_group:
-    branches: [main, master]
+  # `workflow_dispatch` only. A PR or push trigger would make this workflow look
+  # like a gate again, which is the specific thing being retired. Do not add one.
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
-  build:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest]
-        python-version: ['3.8', '3.9', '3.10', '3.11', '3.12', '3.13']
-        include:
-          - os: ubuntu-22.04
-            python-version: '3.7'
-    name: Tests with Python ${{ matrix.python-version }}
+  retired:
+    name: Retired (no-op)
+    runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
-    - name: Set up Python
-      uses: actions/setup-python@v5.2.0
-      with:
-        python-version: ${{ matrix.python-version }}
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install coverage nose
-    - name: Allow us to SSH passwordless to localhost
-      run: |
-        chmod og-rw ~
-        ssh-keygen -f ~/.ssh/id_rsa -N ""
-        cp ~/.ssh/{id_rsa.pub,authorized_keys}
-    - name: Avoid ssh "known hosts" warnings
-      run: |
-        printf '%s\n    %s\n    %s\n' 'Host *' 'StrictHostKeyChecking no' 'LogLevel ERROR' >> ~/.ssh/config
-    - name: Set Python paths when sshing for gateway tests
-      run: |
-        sed -i "1iexport CLUSTERSHELL_GW_PYTHON_EXECUTABLE=$(which python)" ~/.bashrc
-        sed -i "2iexport PYTHONPATH=\$PYTHONPATH:$(realpath $pythonLocation/lib/python*/site-packages)" ~/.bashrc
-        head -2 ~/.bashrc
-    - name: Install pdsh to test WorkerPdsh
-      run: |
-        sudo apt-get -y install pdsh
-        sudo sh -c 'echo ssh > /etc/pdsh/rcmd_default'
-    - name: Add tests/bin to remote PATH
-      run: |
-        sed -i "1iexport PATH=$PWD/tests/bin:\$PATH" ~/.bashrc
-        head -1 ~/.bashrc
-        ssh 127.0.0.2 which hostname
-        ssh 127.0.0.2 hostname
-    - name: Post to Slack (start)
-      if: secrets.SLACK_BOT_TOKEN != ''
-      continue-on-error: true
-      id: slack-start
-      uses: slackapi/slack-github-action@v1.24.0
-      with:
-        channel-id: 'C07GRMDK3'
-        payload: |
-          {
-            "text": "${{ github.workflow }}: Python ${{ matrix.python-version }} tests started (In Progress)",
-            "attachments": [
-              {
-                "color": "#ECB32D",
-                "fields": [
-                  {
-                    "title": "Branch",
-                    "short": true,
-                    "value": "${{ github.ref }}"
-                  },
-                  {
-                    "title": "Actor",
-                    "short": true,
-                    "value": "${{ github.actor }}"
-                  }
-                ]
-              }
-            ]
-          }
-      env:
-        SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-    - name: Run tests
-      id: tests
-      run: |
-        python --version
-        export CLUSTERSHELL_GW_PYTHON_EXECUTABLE=$(which python)
-        nosetests -v --all-modules --with-coverage --cover-tests --cover-erase --cover-package=ClusterShell tests || true
-    - name: Post to Slack (end)
-      if: always() && secrets.SLACK_BOT_TOKEN != ''
-      continue-on-error: true
-      id: slack-end
-      uses: slackapi/slack-github-action@v1.24.0
-      with:
-        channel-id: 'C07GRMDK3'
-        update-ts: ${{ steps.slack-start.outputs.ts }}
-        payload: |
-          {
-            "text": "${{ github.workflow }}: Python ${{ matrix.python-version }} tests completed",
-            "attachments": [
-              {
-                "fields": [
-                  {
-                    "title": "Branch",
-                    "short": true,
-                    "value": "${{ github.ref }}"
-                  },
-                  {
-                    "title": "Status",
-                    "short": true,
-                    "value": "${{ job.status }}"
-                  }
-                ]
-              }
-            ]
-          }
-      env:
-        SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+      - name: Report retirement
+        run: |
+          echo "This workflow was retired by CON-118."
+          echo "It duplicated the ClusterShell Python suite that"
+          echo "  .github/workflows/migration-scorecard.yml"
+          echo "already runs under pytest, and it swallowed its own test exit code,"
+          echo "which made it a gate that could never fail. The retirement rationale"
+          echo "is in the comment block at the top of this file."
+          echo
+          echo "If you need to re-run the upstream ClusterShell Python suite, use:"
+          echo "  python -m pytest tests/ -v --timeout=30"
+          echo "from the repository root."
