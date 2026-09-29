@@ -7,6 +7,11 @@
 
 #![cfg(feature = "docker-tests")]
 
+#[test]
+fn con97_canary_deliberate_failure() {
+    panic!("CON-97 canary: tool integration lane must report red when a tool test fails");
+}
+
 use std::process::Command;
 use std::time::Duration;
 
