@@ -28,11 +28,14 @@ name: Perf Gate
 # is well under 1%, so 5% is genuinely a drift and 10% is genuinely a regression.
 
 on:
+  # CON-209: the `branches:` filter is gone, for the same reason it is gone
+  # from ci.yml. This repo stacks PRs, so a `branches:` filter restricted the
+  # gate to the integration lines and left every stacked PR running no gate and
+  # reporting nothing -- `gh pr checks` prints "no checks reported on the
+  # '<branch>' branch", which reads as "nothing to see" rather than "no signal".
+  # Dropping it makes a PR run the gate against whatever same-repo branch it
+  # targets. It does not add duplicate runs: `pull_request` fires once per PR.
   pull_request:
-    # master is the default branch and the one ordinary PRs open against, so it
-    # has to be listed or the gate never runs for them. sync-upstream-1.10.1 is
-    # the integration line the gate was first written for.
-    branches: [main, master, develop, sync-upstream-1.10.1]
     paths-ignore:
       - 'doc/**'
       - 'docs-index/**'
