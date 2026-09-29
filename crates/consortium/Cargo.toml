@@ -31,6 +31,7 @@ docker-tests = []
 tempfile = "3"
 consortium-test-harness = { path = "../consortium-test-harness" }
 consortium-nix = { path = "../consortium-nix" }
+consortium-fanout-sim = { path = "../consortium-fanout-sim" }
 
 [package.metadata.docs.rs]
 all-features = true

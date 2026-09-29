@@ -31,6 +31,13 @@ use std::time::{Duration, Instant};
 use consortium::worker::ssh::SshOptions;
 use consortium_nix::config::{DeploymentNode, FleetConfig, ProfileType};
 
+pub mod docker_cascade;
+
+pub use docker_cascade::{
+    compare_tiers, final_parent_chain, planned_edges, DockerCascadeExecutor,
+    DockerClusterTransport, EdgeTransport, RecordingTransport, SshHop, StructuralDelta,
+};
+
 /// Cluster topology configuration.
 #[derive(Debug, Clone)]
 pub struct ClusterTopology {

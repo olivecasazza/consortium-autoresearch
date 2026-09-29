@@ -278,6 +278,7 @@ name = "consortium-crate"
 version = "0.1.0"
 dependencies = [
  "configparser",
+ "consortium-fanout-sim",
  "consortium-nix",
  "consortium-test-harness",
  "dirs-next",
@@ -359,6 +360,7 @@ name = "consortium-test-harness"
 version = "0.1.0"
 dependencies = [
  "consortium-crate",
+ "consortium-fanout-sim",
  "consortium-nix",
  "serde",
  "serde_json",
