@@ -34,53 +34,71 @@ A green gate is a precondition for that conversation, not a substitute for it.
 
 ## Current measurement
 
-Measured 2026-09-27 on `consortium-autoresearch` at `4e819e7` (the CON-198
-branch), upstream `cea-hpc/clustershell` @ `v1.9.3`, on a tree where
-`cargo test -p consortium-crate` builds and both Python legs were executed
-locally. **The gate reports `FAIL` on every criterion except the two that are
-trivially satisfied.**
+Measured 2026-09-29 on `consortium-autoresearch` at `24bf186` (`master`),
+upstream `cea-hpc/clustershell` @ `v1.9.3`. All three legs were executed
+locally: `cargo test -p consortium-crate` builds, and both Python legs were
+run against the built bindings. **The gate reports `FAIL` on three of four
+criteria.**
 
-| Metric | CON-4 plan (2026-07-18) | Re-measured (2026-09-27) |
+| Metric | CON-4 plan (2026-07-18) | Re-measured (2026-09-29) |
 | --- | --- | --- |
 | Upstream test classes | 38 | **59** |
 | Upstream test cases | 582 | **1075** |
 | Classes tracked in `TEST_MAPPING.toml` | 38 | **37** |
 | Mapping entries | 582 | 582 |
-| Test cases with a Rust mapping | 37 | 37 |
-| Mapped coverage | 6.4% | **3.4%** (37 / 1075) |
+| Test cases with a Rust mapping | 37 | **61** |
+| Mapped coverage | 6.4% | **5.7%** (61 / 1075) |
 | Classes fully ported | 0 | **0** |
 | Classes with zero mapping | 34 | **55** of 59 |
 | Critical classes (`Task*`/`Tree*`/`CLI*`/`MsgTree*`/`NodeSet*Group*`) | — | **44**, none ported |
 | **Gate coverage** (mapped **and** passing in both runs) | — | **0.0%** (0 / 1075) |
-| Gate regressions | — | **11** |
+| Gate regressions | — | **0** |
 | Reviewed decisions on file | — | **0** |
+
+The coverage ladder, which is the useful way to read that table:
+
+| Rung | Count | Share |
+| --- | --- | --- |
+| upstream test cases | 1075 | 100% |
+| mapped in `TEST_MAPPING.toml` | 61 | 5.7% |
+| …and passing in the Rust-port run | 59 | 5.5% |
+| …and passing in `CONSORTIUM_BACKEND=rust` | 0 | 0.0% |
 
 Test-run legs, same tree:
 
 | Leg | tests | failures | errors |
 | --- | --- | --- | --- |
-| `cargo test -p consortium-crate` (Rust-port) | 405 | 8 | 0 |
+| `cargo test -p consortium-crate` (Rust-port) | 425 | 0 | 0 |
 | `CONSORTIUM_BACKEND=python` (baseline) | 1075 | 289 | 1 |
-| `CONSORTIUM_BACKEND=rust` | 44 | 11 | 33 |
+| `CONSORTIUM_BACKEND=rust` | 11 | 0 | 30 |
 
 Reading these honestly:
 
-- **The Rust-port leg is healthy** — 405 tests, 8 failures, all doctests. This
-  is CON-198's fix working: before it, the same command produced
-  `tests="0"`.
-- **The baseline leg is red**, and mostly it is the oracle talking: 289 failures
-  out of 1075 on the *pure-Python* backend. This is CON-115's territory.
-- **The Rust-backend leg is not a measurement at all** — 33 collection errors
-  means pytest never imported most of the suite. This is CON-116. The gate's
-  criterion 3 correctly refuses to read it, which is why coverage reads 0.0%
-  rather than something flattering.
-- Coverage is 0.0%, not 3.4%, because a mapping is not coverage: the 37 mapped
-  cases also have to *pass* in both legs, and the Rust-backend leg has not run
-  them.
+- **The Rust-port leg is healthy** — 425 tests, zero failures, including the
+  doctests. CON-198's fix is holding on `master`.
+- **The baseline leg is red**, and mostly it is the oracle talking: 289
+  failures out of 1075 on the *pure-Python* backend. That is CON-115's
+  territory, not a Rust regression, so it does not count against criterion 1b.
+- **The Rust-backend leg is still not a measurement** — 30 collection errors.
+  CON-116's fix (#19) improved it (from 44 tests/11 failures/33 errors to
+  11 passed/30 errors) but did not finish it; `TreeTopologyTest.py`,
+  `TreeWorkerTest.py` and `WorkerExecTest.py` still fail to import. Criterion 3
+  correctly refuses to read it, which is why coverage reads 0.0% rather than
+  something flattering.
+- **The Rust work for the mapped set is essentially done**: 59 of 61 mapped
+  methods pass in the Rust-port run. The chain is severed at the last rung, on
+  a leg that is failing to import. That is a different problem from "the porting
+  stream has not started", and it is why the ladder exists — `0.0%` on its own
+  would point at the wrong job.
+- The 2 methods blocked earlier are `NodeSetTest.testRemove` and
+  `RangeSetTest.testRemove`, both mapped to
+  `range_set::tests::test_remove_missing_panics`, which the mapping references
+  but the Rust leg does not contain. A real gap in the mapping, not a test
+  failure.
 
-The headline is therefore worse than the plan assumed, not better: the oracle is
-**45.9% larger than the mapping has ever seen**, and mapped coverage is 3.4%
-rather than 6.4%.
+The headline is still worse than the plan assumed: the oracle is **45.9% larger
+than the mapping has ever seen**, and mapped coverage is 5.7% against an 80%
+floor.
 
 ## What the gate measures
 
@@ -88,7 +106,7 @@ One command, one verdict, exit 0 on `PASS` and 1 on `FAIL`:
 
 ```console
 $ python harness/graduation_gate.py
-GRADUATION GATE: FAIL  coverage=0.0% (required 80%)  covered=0/1075  regressions=11  critical_classes_gap=0/44
+GRADUATION GATE: FAIL  coverage=0.0% (required 80%)  covered=0/1075  regressions=0  critical_classes_gap=0/44
 
   [FAIL] coverage
   [FAIL] regressions
@@ -97,13 +115,13 @@ GRADUATION GATE: FAIL  coverage=0.0% (required 80%)  covered=0/1075  regressions
 
 Coverage ladder:
   upstream test cases                           1075  100.0%  ####################
-  mapped in TEST_MAPPING.toml                     37    3.4%  #
-    ...and passing in the Rust-port run           35    3.3%  #
+  mapped in TEST_MAPPING.toml                     61    5.7%  #
+    ...and passing in the Rust-port run           59    5.5%  #
     ...and passing in CONSORTIUM_BACKEND=rust      0    0.0%
   -> 2 mapped method(s) fail in the Rust-port leg; see Notes
-  -> 35 method(s) pass in the Rust-port run but not in CONSORTIUM_BACKEND=rust; that is the leg to fix next
+  -> 59 method(s) pass in the Rust-port run but not in CONSORTIUM_BACKEND=rust; that is the leg to fix next
 
-Notes (50 method-level findings):
+Notes (63 method-level findings):
   - ExecTest.test_copy: mapped but absent from the CONSORTIUM_BACKEND=rust run
   - ...
 ```
@@ -114,7 +132,7 @@ knowing about:
 
 - **The coverage ladder.** Coverage is a three-way conjunction, so a single
   ratio cannot say which link in the chain is short. `0.0%` alone reads as "the
-  porting stream has done nothing"; the ladder shows that 35 of the 37 mapped
+  porting stream has done nothing"; the ladder shows that 59 of the 61 mapped
   methods *do* pass in the Rust-port run and the chain is severed at the last
   rung, by a broken `CONSORTIUM_BACKEND=rust` leg. That is a materially
   different thing to tell the porting stream, and it points at a different next
@@ -131,7 +149,7 @@ after the scorecard legs have produced their JUnit files.
 ### Criterion 1 — coverage
 
 `min_method_coverage = 0.80` (80%). A method counts only if it is **all three**
-of these, which is why the number is far below the 3.4% mapping rate:
+of these, which is why the number is far below the 5.7% mapping rate:
 
 1. mapped to at least one Rust test in `TEST_MAPPING.toml`;
 2. **passing** in the Rust-port run (`results/rust-unit.xml`);
@@ -185,7 +203,8 @@ the scorecard's mapping artifact, which belongs to the scorecard-step owners. Th
 gate is deliberately independent of it: it re-derives the truth from the tree, so
 the floor cannot be met by inheriting the mapping's blind spots.
 
-Mapped coverage is therefore **3.4%** (37 of 1075), not 6.4%.
+Mapped coverage is therefore **5.7%** (61 of 1075), not the 6.4% the plan
+assumed.
 
 ### Criterion 1b — no regressions
 
@@ -273,9 +292,9 @@ So the real question CON-4 has to answer is not "can we delete 436 lines of
 Python?" It is: **once the side-by-side comparison stops running on every PR,
 what is left that would catch a divergence between the Rust implementation and
 upstream ClusterShell's behavior?** Today the answer is "the mapping in
-`TEST_MAPPING.toml` plus the 3.4% of the oracle it covers" — which is why the
-floor is 80% and not lower. At 3.4%, retiring the harness would leave the
-divergence detector switched off while 96.6% of what it detects is unported and
+`TEST_MAPPING.toml` plus the 5.7% of the oracle it covers" — which is why the
+floor is 80% and not lower. At 5.7%, retiring the harness would leave the
+divergence detector switched off while 94.3% of what it detects is unported and
 45.9% of the oracle was never even in its field of view.
 
 Note also that `TEST_MAPPING.toml` is regenerated on every scorecard run
@@ -304,7 +323,7 @@ In `.github/workflows/migration-scorecard.yml`, after the scorecard legs:
 3. The JSON report is uploaded as the `graduation-gate-report` artifact,
    retained 90 days, so a `PASS` can be traced to the run that produced it.
 
-**The gate step is `continue-on-error: true` on purpose.** At 3.4% coverage it is
+**The gate step is `continue-on-error: true` on purpose.** At 5.7% coverage it is
 *supposed* to report `FAIL`; a hard-failing required check would paint every PR
 red until the porting stream reaches 80%, and a permanently-red check is one
 nobody reads. The signal is wired, reported, archived, and consumed as a job
