@@ -553,3 +553,92 @@ def test_the_self_tests_do_not_write_to_the_ci_output_channels(tmp_path, monkeyp
 
     assert gh_out.read_text() == ""
     assert gh_sum.read_text() == ""
+
+
+# ── unreadable legs ──────────────────────────────────────────────────────
+
+
+def test_an_unreadable_leg_is_a_problem_not_an_empty_result(tmp_path):
+    """A leg that could not be read must not look like a leg that ran and found
+    nothing. Previously a missing python-original.xml left the regression check
+    reporting a vacuous `[PASS] 0 method(s)`, and the run was still scored."""
+    write_upstream(ALL_GREEN, tmp_path)
+    (tmp_path / "TEST_MAPPING.toml").write_text(MAPPED_ALL)
+    (tmp_path / "tests").mkdir(exist_ok=True)
+    (tmp_path / "results").mkdir(exist_ok=True)
+    # Only the Rust leg is present; both Python legs are absent entirely.
+    (tmp_path / "results" / "rust-unit.xml").write_text(
+        rust_junit(["task::tests::test_a", "task::tests::test_b", "tree::tests::test_c",
+                    "misc::tests::test_d", "misc::tests::test_e"])
+    )
+    (tmp_path / "graduation-gate.toml").write_text(CONFIG)
+    (tmp_path / "graduation-exemptions.toml").write_text(EXEMPTIONS_HEADER)
+
+    code, out, report = run_gate(
+        tmp_path, mapping=MAPPED_ALL,
+        rust_unit=(tmp_path / "results" / "rust-unit.xml").read_text(),
+        python_original=None, python_rust=None,
+    )
+    assert code == 1, out
+
+    signal = next(c for c in report["checks"] if c["name"] == "trustworthy-signal")
+    assert not signal["passed"], report["checks"]
+    assert "2 unreadable leg(s)" in signal["measured"]
+    assert any("python-original.xml" in p for p in report["problems"])
+
+    # ...and the regression check is explicitly unmeasured rather than "0".
+    reg = next(c for c in report["checks"] if c["name"] == "regressions")
+    assert not reg["passed"]
+    assert reg["measured"] == "not measured"
+
+    # The failure must be printed, not merely recorded in the JSON.
+    assert "missing" in out
+
+
+def test_an_unparseable_leg_is_a_problem_not_an_empty_result(tmp_path):
+    write_upstream(ALL_GREEN, tmp_path)
+    (tmp_path / "TEST_MAPPING.toml").write_text(MAPPED_ALL)
+    (tmp_path / "tests").mkdir(exist_ok=True)
+    (tmp_path / "results").mkdir(exist_ok=True)
+    (tmp_path / "results" / "rust-unit.xml").write_text(
+        rust_junit(["task::tests::test_a", "task::tests::test_b", "tree::tests::test_c",
+                    "misc::tests::test_d", "misc::tests::test_e"])
+    )
+    # Valid XML, but not JUnit: must not be silently scored as an empty leg.
+    (tmp_path / "results" / "python-original.xml").write_text(
+        '<?xml version="1.0"?><notjunit><suite/></notjunit>'
+    )
+    (tmp_path / "results" / "python-rust.xml").write_text(
+        '<?xml version="1.0"?><notjunit><suite/></notjunit>'
+    )
+    (tmp_path / "graduation-gate.toml").write_text(CONFIG)
+    (tmp_path / "graduation-exemptions.toml").write_text(EXEMPTIONS_HEADER)
+
+    code, out, report = run_gate(
+        tmp_path, mapping=MAPPED_ALL,
+        rust_unit=(tmp_path / "results" / "rust-unit.xml").read_text(),
+        python_original=(tmp_path / "results" / "python-original.xml").read_text(),
+        python_rust=(tmp_path / "results" / "python-rust.xml").read_text(),
+    )
+    assert code == 1, out
+    signal = next(c for c in report["checks"] if c["name"] == "trustworthy-signal")
+    assert not signal["passed"]
+
+
+def test_a_measured_zero_regressions_is_still_reported_when_the_legs_are_readable(tmp_path):
+    """The 'not measured' override must be tied to leg readability, not to the
+    count. With both Python legs readable and green, the gate must be able to
+    say 0 rather than refusing to answer."""
+    write_upstream(ALL_GREEN, tmp_path)
+    py_classes = {**ALL_GREEN, "UnrelatedTest": ["test_d", "test_e"]}
+    py = py_all_pass(py_classes)
+    rust = rust_junit(["task::tests::test_a", "task::tests::test_b", "tree::tests::test_c",
+                       "misc::tests::test_d", "misc::tests::test_e"])
+    code, out, report = run_gate(
+        tmp_path, mapping=MAPPED_ALL, rust_unit=rust, python_original=py, python_rust=py
+    )
+    assert code == 0, out
+    reg = next(c for c in report["checks"] if c["name"] == "regressions")
+    assert reg["passed"]
+    assert reg["measured"] == "0 method(s)"
+    assert "regressions=0 " in out  # first token of the one-liner

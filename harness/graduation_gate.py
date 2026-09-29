@@ -61,6 +61,11 @@ DEFAULT_RESULTS = Path("results")
 EXEMPTION_REQUIRED_FIELDS = ("class", "decision", "reason", "reviewer", "date", "issue")
 VALID_DECISIONS = ("accept", "defer")
 
+# Method-level notes are printed so an operator can see why coverage is what it
+# is, but a 1075-method tree can generate thousands of them. The full set always
+# goes to --json-out; this bounds the console.
+NOTES_SHOWN = 20
+
 
 # ── upstream inventory ────────────────────────────────────────────────────
 
@@ -165,20 +170,33 @@ def scan_upstream_methods(tests_dir: Path) -> tuple[list[Method], list[str]]:
 
 
 def parse_junit(path: Path) -> tuple[dict[str, str], int, list[str]]:
-    """-> ({test_key: status}, collection_error_count, unparsed_notes)."""
+    """-> ({test_key: status}, collection_error_count, load_failures).
+
+    A leg that could not be read at all is a `load_failure`, not an empty
+    result set. The distinction matters: an empty dict from a *successful* run
+    is a measurement, and an empty dict from a *missing file* is the absence of
+    one. Treating the second as the first let the regression check report a
+    vacuous "0 method(s)" when the baseline leg had never run.
+    """
     if not path.exists():
         return {}, 0, [f"missing {path}"]
 
     try:
         root = ET.parse(path).getroot()
-    except ET.ParseError as exc:
-        return {}, 0, [f"unparseable {path}: {exc}"]
+    except (ET.ParseError, OSError) as exc:
+        return {}, 0, [f"unreadable {path}: {exc}"]
 
     results: dict[str, str] = {}
     collection_errors = 0
     suites = root.findall(".//testsuite")
     if root.tag == "testsuite":
         suites = [root]
+    if not suites:
+        # Parses as XML, but is not a JUnit report. Scoring this as a leg that
+        # ran and found zero tests would be the same mistake as reading a
+        # missing file as an empty one: absence of a measurement presented as
+        # a clean measurement.
+        return {}, 0, [f"no <testsuite> in {path} (root is <{root.tag}>; not a JUnit report)"]
 
     for suite in suites:
         for tc in suite.findall("testcase"):
@@ -241,8 +259,17 @@ class Config:
 def load_config(path: Path) -> Config:
     data = tomllib.loads(path.read_text())
     warnings: list[str] = []
-    if path == DEFAULT_CONFIG:
-        warnings.append(f"using non-default config {path}")
+    # Record when the floor in force is not the committed one, so a PASS
+    # achieved against a lowered threshold is visibly not the approved floor.
+    default = REPO_ROOT / DEFAULT_CONFIG
+    if path.resolve() != default.resolve() and default.exists():
+        committed = tomllib.loads(default.read_text()).get("min_method_coverage")
+        if committed is not None and data.get("min_method_coverage") != committed:
+            warnings.append(
+                f"using a non-default config {path} "
+                f"(min_method_coverage={data.get('min_method_coverage')}, "
+                f"committed default is {committed})"
+            )
 
     ref_file = data.get("upstream", {}).get("ref_file", "UPSTREAM_REF")
     ref_path = REPO_ROOT / ref_file
@@ -337,6 +364,7 @@ def evaluate(
     exemptions: dict[str, Exemption],
     collection_errors: dict[str, int],
     notes: list[str],
+    load_failures: list[str],
 ) -> tuple[list[Check], dict[str, dict]]:
     checks: list[Check] = []
     rust_idx = rust_test_index(rust_unit)
@@ -393,15 +421,36 @@ def evaluate(
         for m in methods
         if py_orig.get(m.key) == "pass" and py_rust.get(m.key) in ("fail", "error")
     ]
-    checks.append(
-        Check(
-            name="regressions",
-            passed=not regressions,
-            measured=f"{len(regressions)} method(s)",
-            required="0",
-            detail=", ".join(regressions[:5]) + (" …" if len(regressions) > 5 else ""),
+    # "Zero regressions" is only a claim if there was a baseline to regress
+    # from. If the baseline leg could not be read, this check was not measured,
+    # and saying `0` would be a vacuous pass dressed as a clean bill of health.
+    baseline_missing = any("python-original.xml" in f for f in load_failures)
+    rust_leg_missing = any("python-rust.xml" in f for f in load_failures)
+    if baseline_missing or rust_leg_missing:
+        unmeasured = " and ".join(
+            name
+            for name, missing in (("baseline", baseline_missing), ("rust-backend", rust_leg_missing))
+            if missing
         )
-    )
+        checks.append(
+            Check(
+                name="regressions",
+                passed=False,
+                measured="not measured",
+                required="0, measured against a readable baseline",
+                detail=f"the {unmeasured} leg could not be read, so there is nothing to compare",
+            )
+        )
+    else:
+        checks.append(
+            Check(
+                name="regressions",
+                passed=not regressions,
+                measured=f"{len(regressions)} method(s)",
+                required="0",
+                detail=", ".join(regressions[:5]) + (" …" if len(regressions) > 5 else ""),
+            )
+        )
 
     # 2. no unmapped critical paths
     critical = sorted(c for c in per_class if any(fnmatch.fnmatchcase(c, g) for g in cfg.critical_class_globs))
@@ -424,8 +473,8 @@ def evaluate(
     )
 
     # 3. the signal itself is trustworthy
-    signal_problems: list[str] = []
-    if cfg.require_nonempty_rust_leg and not rust_unit:
+    signal_problems: list[str] = list(load_failures)
+    if cfg.require_nonempty_rust_leg and not rust_unit and not load_failures:
         signal_problems.append(
             f"the Rust-unit leg produced no results — it is not measuring {cfg.rust_leg_crate}"
         )
@@ -438,8 +487,9 @@ def evaluate(
             name="trustworthy-signal",
             passed=not signal_problems,
             measured=f"{len(rust_unit)} Rust-unit results, "
-            f"{sum(collection_errors.values())} collection error(s)",
-            required="a non-empty Rust-unit leg and error-free Python collection",
+            f"{sum(collection_errors.values())} collection error(s), "
+            f"{len(load_failures)} unreadable leg(s)",
+            required="every leg readable, a non-empty Rust-unit leg, error-free Python collection",
             detail="; ".join(signal_problems),
         )
     )
@@ -487,30 +537,37 @@ def main() -> int:
     if not methods:
         sys.exit(f"graduation_gate.py: found no upstream test methods under {tests_dir}")
 
-    py_orig, orig_ce, orig_notes = parse_junit(results_dir / "python-original.xml")
-    py_rust, rust_ce, rust_notes = parse_junit(results_dir / "python-rust.xml")
-    rust_unit, _, unit_notes = parse_junit(results_dir / "rust-unit.xml")
-    notes.extend(orig_notes + rust_notes + unit_notes)
+    py_orig, orig_ce, orig_fails = parse_junit(results_dir / "python-original.xml")
+    py_rust, rust_ce, rust_fails = parse_junit(results_dir / "python-rust.xml")
+    rust_unit, _, unit_fails = parse_junit(results_dir / "rust-unit.xml")
+    # A leg that could not be read is a hard problem, not a note: without the
+    # baseline the regression check is vacuous, and without the rust-backend leg
+    # the coverage check is vacuous. Both must be visible, not merely recorded.
+    load_failures = orig_fails + rust_fails + unit_fails
+    problems.extend(load_failures)
 
     checks, per_class = evaluate(
         methods, mapping, py_orig, py_rust, rust_unit, cfg, exemptions,
         {"CONSORTIUM_BACKEND=python": orig_ce, "CONSORTIUM_BACKEND=rust": rust_ce},
         notes,
+        load_failures,
     )
-    problems.extend(n for n in notes if n.startswith("graduation_gate:"))
 
     passed = all(c.passed for c in checks) and not problems
     covered = sum(r["covered"] for r in per_class.values())
 
     coverage_check = next(c for c in checks if c.name == "coverage")
+    regression_check = next(c for c in checks if c.name == "regressions")
+    critical_check = next(c for c in checks if c.name == "critical-paths")
     verdict = "PASS" if passed else "FAIL"
+    regressions_token = regression_check.measured.split(" ", 1)[0].replace("not", "not-measured")
     print(
         f"GRADUATION GATE: {verdict}  "
         f"coverage={coverage_check.measured.split(' ', 1)[0]} "
         f"(required {cfg.min_method_coverage * 100:.0f}%)  "
         f"covered={covered}/{len(methods)}  "
-        f"regressions={next(c for c in checks if c.name == 'regressions').measured.split(' ', 1)[0]}  "
-        f"critical_classes_gap={next(c for c in checks if c.name == 'critical-paths').measured.split(' ', 1)[0]}"
+        f"regressions={regressions_token}  "
+        f"critical_classes_gap={critical_check.measured.split(' ', 1)[0]}"
     )
     print()
 
@@ -526,6 +583,18 @@ def main() -> int:
         print("Problems:")
         for p in problems:
             print(f"  - {p}")
+        print()
+
+    # Why individual methods did not count. Without this the gate reports
+    # `coverage=0.0%` and leaves the operator to diff two JUnit files by hand,
+    # which is the whole job the gate exists to do.
+    if notes:
+        shown, total = notes[:NOTES_SHOWN], len(notes)
+        print(f"Notes ({total} method-level finding{'s' if total != 1 else ''}):")
+        for n in shown:
+            print(f"  - {n}")
+        if total > NOTES_SHOWN:
+            print(f"  … {total - NOTES_SHOWN} more (see --json-out)")
         print()
 
     print(
