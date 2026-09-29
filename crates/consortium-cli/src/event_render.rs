@@ -1324,47 +1324,54 @@ mod tests {
         // n2 (Failed) should appear before n1 (Ok) in the final frame
         // due to priority sorting (Failed → priority 0, Ok → priority 3).
         //
-        // Capture mode bypasses the 60ms gate, so all 4 paint-triggering
-        // events (PlanComputed, RoundCompleted, Finished) still produce frames.
+        // Capture mode bypasses the 60ms gate, so every emitted event
+        // repaints — `LiveTreeRenderer::emit` repaints on all events
+        // (per-edge progress included), not just on round boundaries.
         let renderer = LiveTreeRenderer::with_capture(false, None);
 
-        renderer.emit(&CascadeEvent::Started {
-            n_nodes: 4,
-            seeded: vec![NodeId(0)],
-            strategy: "log2-fanout".into(),
-            at: SystemTime::UNIX_EPOCH,
-        });
-        renderer.emit(&CascadeEvent::PlanComputed {
-            round: 0,
-            assignments: vec![
-                Edge {
-                    src: NodeId(0),
-                    tgt: NodeId(1),
-                },
-                Edge {
-                    src: NodeId(0),
-                    tgt: NodeId(2),
-                },
-            ],
-        });
-        renderer.emit(&edge_completed(0, 0, 1, 5)); // n1 → Ok
-        renderer.emit(&edge_failed(0, 0, 2)); // n2 → Failed
-        renderer.emit(&CascadeEvent::RoundCompleted {
-            round: 0,
-            duration: Duration::from_millis(5),
-            has_closure: vec![NodeId(0), NodeId(1)],
-        });
-        renderer.emit(&edge_completed(1, 1, 3, 5));
-        renderer.emit(&CascadeEvent::RoundCompleted {
-            round: 1,
-            duration: Duration::from_millis(5),
-            has_closure: vec![NodeId(0), NodeId(1), NodeId(3)],
-        });
-        renderer.emit(&CascadeEvent::Finished {
-            converged: 3,
-            failed: 1,
-            rounds: 2,
-        });
+        let events = vec![
+            CascadeEvent::Started {
+                n_nodes: 4,
+                seeded: vec![NodeId(0)],
+                strategy: "log2-fanout".into(),
+                at: SystemTime::UNIX_EPOCH,
+            },
+            CascadeEvent::PlanComputed {
+                round: 0,
+                assignments: vec![
+                    Edge {
+                        src: NodeId(0),
+                        tgt: NodeId(1),
+                    },
+                    Edge {
+                        src: NodeId(0),
+                        tgt: NodeId(2),
+                    },
+                ],
+            },
+            edge_completed(0, 0, 1, 5), // n1 → Ok
+            edge_failed(0, 0, 2),       // n2 → Failed
+            CascadeEvent::RoundCompleted {
+                round: 0,
+                duration: Duration::from_millis(5),
+                has_closure: vec![NodeId(0), NodeId(1)],
+            },
+            edge_completed(1, 1, 3, 5),
+            CascadeEvent::RoundCompleted {
+                round: 1,
+                duration: Duration::from_millis(5),
+                has_closure: vec![NodeId(0), NodeId(1), NodeId(3)],
+            },
+            CascadeEvent::Finished {
+                converged: 3,
+                failed: 1,
+                rounds: 2,
+            },
+        ];
+        let expected_frames = events.len();
+        for event in &events {
+            renderer.emit(event);
+        }
 
         let captured = renderer.captured();
 
@@ -1375,26 +1382,32 @@ mod tests {
         // line: `\x1b[2K` for the bottom line, then `\x1b[1A\x1b[2K`
         // for each line above.
         //
-        // Test events: PlanComputed → frame 1, RoundCompleted×2 → frames
-        // 2-3, Finished → frame 4. Total 4 sync-update begin markers.
-        // (Capture mode bypasses the 60ms gate so all 4 paint.)
+        // The invariant is one synchronized-update cycle per repaint,
+        // and one repaint per emitted event. The count is derived from
+        // the event list rather than hardcoded, because the repaint
+        // policy has changed before (per-edge repaints landed in
+        // a8a5c27) and a hardcoded total silently rots into a false
+        // "double render" report the next time it does.
         let sync_begin = captured.matches("\x1b[?2026h").count();
         assert_eq!(
-            sync_begin, 4,
-            "expected exactly 4 synchronized-update begin markers (one per repaint); got {sync_begin}\n{captured:?}"
+            sync_begin,
+            expected_frames,
+            "expected exactly one synchronized-update begin marker per emitted event ({expected_frames}); got {sync_begin}\n{captured:?}"
         );
         let sync_end = captured.matches("\x1b[?2026l").count();
         assert_eq!(
-            sync_end, 4,
-            "synchronized-update markers should be balanced"
+            sync_end, expected_frames,
+            "synchronized-update markers should be balanced, one end per begin"
         );
-        // Frames 2, 3, 4 each emit at least one clear-line escape
-        // (\x1b[2K) since they're erasing prior content. Don't assert
-        // exact count — depends on how many lines the prior frame had.
+        // Every frame after the first emits at least one clear-line
+        // escape (\x1b[2K) since they're erasing prior content. Don't
+        // assert exact count — depends on how many lines the prior frame
+        // had.
         let clear_lines = captured.matches("\x1b[2K").count();
         assert!(
-            clear_lines >= 3,
-            "expected at least 3 clear-line escapes (one per non-first frame); got {clear_lines}\n{captured:?}"
+            clear_lines >= expected_frames - 1,
+            "expected at least one clear-line escape per non-first frame ({}); got {clear_lines}\n{captured:?}",
+            expected_frames - 1
         );
         // Every frame should include the heavy section border ┏━ at top
         // and ┗━ at bottom — that's how nom wraps each section.
