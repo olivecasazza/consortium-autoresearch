@@ -88,12 +88,40 @@ One command, one verdict, exit 0 on `PASS` and 1 on `FAIL`:
 
 ```console
 $ python harness/graduation_gate.py
-GRADUATION GATE: FAIL  coverage=0.0% (required 80%)  covered=0/1075  regressions=0  critical_classes_gap=0/44
+GRADUATION GATE: FAIL  coverage=0.0% (required 80%)  covered=0/1075  regressions=11  critical_classes_gap=0/44
+
+  [FAIL] coverage
+  [FAIL] regressions
+  [FAIL] critical-paths
+  [FAIL] trustworthy-signal
+
+Coverage ladder:
+  upstream test cases                           1075  100.0%  ####################
+  mapped in TEST_MAPPING.toml                     37    3.4%  #
+    ...and passing in the Rust-port run           35    3.3%  #
+    ...and passing in CONSORTIUM_BACKEND=rust      0    0.0%
+  -> 2 mapped method(s) fail in the Rust-port leg; see Notes
+  -> 35 method(s) pass in the Rust-port run but not in CONSORTIUM_BACKEND=rust; that is the leg to fix next
+
+Notes (50 method-level findings):
+  - ExecTest.test_copy: mapped but absent from the CONSORTIUM_BACKEND=rust run
+  - ...
 ```
 
 The first line is the whole contract: a single `PASS`/`FAIL` token plus the
-measured-vs-required numbers. The rest of the output is the per-criterion
-breakdown for a human.
+measured-vs-required numbers. The rest is for a human, and the two parts worth
+knowing about:
+
+- **The coverage ladder.** Coverage is a three-way conjunction, so a single
+  ratio cannot say which link in the chain is short. `0.0%` alone reads as "the
+  porting stream has done nothing"; the ladder shows that 35 of the 37 mapped
+  methods *do* pass in the Rust-port run and the chain is severed at the last
+  rung, by a broken `CONSORTIUM_BACKEND=rust` leg. That is a materially
+  different thing to tell the porting stream, and it points at a different next
+  job.
+- **The notes.** Why individual methods did not count — most usefully, a
+  mapping pointing at a Rust test that does not exist. Bounded to 20 on the
+  console; the full set is always in `--json-out`.
 
 It is **read-only and idempotent**. It reads the tree and the JUnit XML in
 `results/`, and writes nothing except `--json-out` when you ask for it. It never
@@ -181,6 +209,20 @@ reviewed, recorded judgement that the Rust feature set covers the behavior by
 other means is. The file is currently **empty**, which is the honest state: 44
 critical classes, none ported.
 
+The two satisfying states are reported **apart**, because conflating them is
+misleading in exactly the direction that matters:
+
+```console
+  [FAIL] critical-paths
+         measured: 0/44 critical classes fully covered; 1 exempted by reviewed decision
+         required: 1/44 (ported, or exempt with a reviewed decision)
+         detail:   exempted: CLIClubakTest
+```
+
+`1/44 fully covered` would read as one class genuinely ported. On a floor that
+exists to decide whether a correctness oracle can be deleted, the difference
+between "we ported it" and "we decided not to" is the whole question.
+
 ### Criterion 3 — the signal is trustworthy
 
 This is the criterion that earns the rest of them the right to be believed.
@@ -245,12 +287,17 @@ CI step order matters: generate the mapping, then run the gate.
 
 In `.github/workflows/migration-scorecard.yml`, after the scorecard legs:
 
-1. `Test the graduation gate` — runs the gate's own self-tests. These are what
-   stop a `FAIL` from being "fixed" by weakening the gate: they assert the gate
-   fails on an empty Rust leg, on a collection error, on a single regression, on
-   an unreviewed exemption, and on a mapping to a nonexistent Rust test — and
-   that it still reports `PASS` on a fully-ported world and exactly on the
-   floor.
+1. `Test the graduation gate` — runs the gate's own 32 self-tests. These are
+   what stop a `FAIL` from being "fixed" by weakening the gate: they assert the
+   gate fails on an empty Rust leg, on a collection error, on a single
+   regression, on an unreviewed exemption, on a mapping to a nonexistent Rust
+   test, and on a leg that is **missing** rather than empty — and that it still
+   reports `PASS` on a fully-ported world and exactly on the floor.
+
+   They run in the same job and environment as the gate, so they explicitly
+   scrub `GITHUB_OUTPUT` and `GITHUB_STEP_SUMMARY`: without that, each of the 32
+   fixtures appends its own `graduation_gate=` line and the real signal arrives
+   buried in synthetic ones. Both directions are tested.
 2. `CON-4 graduation gate` — runs the gate, writes `results/graduation-gate.json`,
    and publishes `graduation_gate=PASS|FAIL` as a job output plus a step-summary
    table.
