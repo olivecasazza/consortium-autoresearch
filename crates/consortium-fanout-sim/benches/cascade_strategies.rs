@@ -36,6 +36,12 @@ fn bench_uniform_256(c: &mut Criterion) {
         seed_fraction: 0.0,
         closure_bytes: 50 * 1024 * 1024,
         bandwidth: BandwidthDistribution::Uniform(100 * 1024 * 1024),
+        // `af7a903` added `uplinks` to ScenarioConfig and no CI lane builds
+        // bench targets, so the omission was invisible until a perf gate
+        // measured this bench. `None` is the pre-`uplinks` behaviour: plain
+        // per-edge bandwidth, no contention math. That is what these three
+        // scenarios measured before the field existed, so the numbers stay
+        // comparable to every baseline taken up to this point.
         uplinks: None,
         failures: FailureSchedule::None,
         max_rounds: 32,
@@ -61,6 +67,7 @@ fn bench_bimodal_256(c: &mut Criterion) {
             fast: 1024 * 1024 * 1024,
             fast_fraction: 0.3,
         },
+        // See bench_uniform_256: `None` keeps the pre-`uplinks` measurement.
         uplinks: None,
         failures: FailureSchedule::None,
         max_rounds: 32,
@@ -86,6 +93,7 @@ fn bench_bimodal_512(c: &mut Criterion) {
             fast: 1024 * 1024 * 1024,
             fast_fraction: 0.3,
         },
+        // See bench_uniform_256: `None` keeps the pre-`uplinks` measurement.
         uplinks: None,
         failures: FailureSchedule::None,
         max_rounds: 32,
