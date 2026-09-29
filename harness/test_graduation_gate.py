@@ -741,3 +741,95 @@ def test_note_wording_reads_as_english(tmp_path):
     assert " failed in the CONSORTIUM_BACKEND=rust run" in joined or \
            " errored in the CONSORTIUM_BACKEND=rust run" in joined
     assert "but fail in" not in joined
+
+
+# ── exemptions are reported apart from genuine coverage ──────────────────
+
+
+def test_an_exemption_is_not_reported_as_a_ported_class(tmp_path):
+    """A class satisfies criterion two two different ways, and the gate must not
+    blur them: "1/44 fully covered" reads as one class genuinely ported when
+    the truth may be that zero are and one is administratively waived.
+
+    TaskFooTest is critical and only 2/3 covered, so the exemption is what
+    satisfies it -- the case that would otherwise be miscounted.
+    """
+    classes = {**ALL_GREEN, "TaskFooTest": ["test_a", "test_b", "test_unmapped"]}
+    write_upstream(classes, tmp_path)
+    (tmp_path / "tests").mkdir(exist_ok=True)
+    (tmp_path / "results").mkdir(exist_ok=True)
+    rust = rust_junit(["task::tests::test_a", "task::tests::test_b", "tree::tests::test_c"])
+    py = junit(
+        [("tests.TaskFooTest", n, "pass")
+         for n in ("test_a", "test_b", "test_unmapped")]
+        + [("tests.TreeBarTest", "test_c", "pass"),
+           ("tests.UnrelatedTest", "test_d", "pass")]
+    )
+    (tmp_path / "results" / "rust-unit.xml").write_text(rust)
+    (tmp_path / "results" / "python-original.xml").write_text(py)
+    (tmp_path / "results" / "python-rust.xml").write_text(py)
+    (tmp_path / "graduation-gate.toml").write_text(CONFIG)
+
+    # Baseline: the critical gap is real.
+    (tmp_path / "graduation-exemptions.toml").write_text(EXEMPTIONS_HEADER)
+    _, _, report = run_gate(
+        tmp_path, mapping=MAPPED, rust_unit=rust, python_original=py, python_rust=py
+    )
+    crit = next(c for c in report["checks"] if c["name"] == "critical-paths")
+    assert not crit["passed"]
+    assert "TaskFooTest 2/3" in crit["detail"]
+    assert "exempted" not in crit["measured"]
+
+    # Now exempt it.
+    exempt = (
+        EXEMPTIONS_HEADER
+        + "\n[[exemption]]\n"
+        + 'class = "TaskFooTest"\n'
+        + 'decision = "accept"\n'
+        + 'reason = "No Task equivalent in the Rust feature set."\n'
+        + 'reviewer = "CTO"\n'
+        + 'date = "2026-09-27"\n'
+        + 'issue = "CON-4"\n'
+    )
+    _, out, report = run_gate(
+        tmp_path, mapping=MAPPED, rust_unit=rust, python_original=py, python_rust=py,
+        exemptions=exempt,
+    )
+    crit = next(c for c in report["checks"] if c["name"] == "critical-paths")
+    assert crit["passed"], crit
+    assert "1/2 critical classes fully covered" in crit["measured"]
+    assert "1 exempted by reviewed decision" in crit["measured"]
+    # The exempted class must not also be listed as a gap, but it should be
+    # named as exempted -- a silent waiver is exactly what the reviewer is
+    # checking for.
+    assert "TaskFooTest 2/3" not in crit["detail"]
+    assert "exempted: TaskFooTest" in crit["detail"]
+
+
+def test_a_genuinely_ported_critical_class_is_reported_as_covered(tmp_path):
+    """The other direction: a critical class that really is fully covered must
+    be counted as covered, not as exempted."""
+    write_upstream(ALL_GREEN, tmp_path)
+    (tmp_path / "TEST_MAPPING.toml").write_text(MAPPED_ALL)
+    (tmp_path / "tests").mkdir(exist_ok=True)
+    (tmp_path / "results").mkdir(exist_ok=True)
+    (tmp_path / "results" / "rust-unit.xml").write_text(
+        rust_junit(["task::tests::test_a", "task::tests::test_b", "tree::tests::test_c",
+                    "misc::tests::test_d", "misc::tests::test_e"])
+    )
+    py = py_all_pass({**ALL_GREEN, "UnrelatedTest": ["test_d", "test_e"]})
+    (tmp_path / "results" / "python-original.xml").write_text(py)
+    (tmp_path / "results" / "python-rust.xml").write_text(py)
+    (tmp_path / "graduation-gate.toml").write_text(CONFIG)
+    (tmp_path / "graduation-exemptions.toml").write_text(EXEMPTIONS_HEADER)
+
+    code, out, report = run_gate(
+        tmp_path, mapping=MAPPED_ALL,
+        rust_unit=(tmp_path / "results" / "rust-unit.xml").read_text(),
+        python_original=py, python_rust=py,
+    )
+    assert code == 0, out
+    crit = next(c for c in report["checks"] if c["name"] == "critical-paths")
+    assert crit["passed"]
+    assert "2/2 critical classes fully covered" in crit["measured"]
+    assert "exempted" not in crit["measured"]

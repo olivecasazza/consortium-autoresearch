@@ -458,20 +458,37 @@ def evaluate(
     # 2. no unmapped critical paths
     critical = sorted(c for c in per_class if any(fnmatch.fnmatchcase(c, g) for g in cfg.critical_class_globs))
     gaps: list[str] = []
+    fully_covered: list[str] = []
+    exempted: list[str] = []
     for cls in critical:
         row = per_class[cls]
         if row["covered"] == row["total"]:
+            fully_covered.append(cls)
             continue
         if cls in exemptions:
+            exempted.append(cls)
             continue
         gaps.append(f"{cls} {row['covered']}/{row['total']}")
+
+    # A class satisfies this criterion two different ways, and conflating them
+    # is misleading in exactly the direction that matters: "1/44 fully covered"
+    # reads as one class genuinely ported when the truth may be that zero are
+    # and one is administratively waived. Report them apart.
+    satisfied = len(fully_covered) + len(exempted)
+    parts = [f"{len(fully_covered)}/{len(critical)} critical classes fully covered"]
+    if exempted:
+        parts.append(f"{len(exempted)} exempted by reviewed decision")
     checks.append(
         Check(
             name="critical-paths",
             passed=not gaps,
-            measured=f"{len(critical) - len(gaps)}/{len(critical)} critical classes fully covered",
-            required=f"{len(critical)}/{len(critical)} (or a reviewed decision)",
-            detail=", ".join(gaps[:6]) + (" …" if len(gaps) > 6 else ""),
+            measured="; ".join(parts),
+            required=f"{satisfied}/{len(critical)} (ported, or exempt with a reviewed decision)",
+            detail=(
+                (", ".join(gaps[:6]) + (" …" if len(gaps) > 6 else ""))
+                if gaps
+                else (f"exempted: {', '.join(exempted)}" if exempted else "")
+            ),
         )
     )
 
