@@ -642,3 +642,102 @@ def test_a_measured_zero_regressions_is_still_reported_when_the_legs_are_readabl
     assert reg["passed"]
     assert reg["measured"] == "0 method(s)"
     assert "regressions=0 " in out  # first token of the one-liner
+
+
+# ── the coverage ladder ──────────────────────────────────────────────────
+
+
+def test_the_ladder_locates_which_link_in_the_chain_is_short(tmp_path):
+    """A single ratio over a three-way conjunction cannot say whether the gap is
+    in the mapping, the Rust-port run, or the rust-backend run. Reporting
+    "0.0%" alone makes the porting stream look untouched even when the Rust work
+    is done and the chain is severed at the last leg."""
+    py_classes = {**ALL_GREEN, "UnrelatedTest": ["test_d", "test_e"]}
+    write_upstream(py_classes, tmp_path)
+    # Rust leg: everything green. rust-backend leg: nothing ran. Exactly the
+    # CON-116 shape, where the mapping and the Rust work are both fine.
+    rust = rust_junit(["task::tests::test_a", "task::tests::test_b", "tree::tests::test_c",
+                       "misc::tests::test_d", "misc::tests::test_e"])
+    empty_py = junit([])
+    code, out, report = run_gate(
+        tmp_path, mapping=MAPPED_ALL, rust_unit=rust,
+        python_original=empty_py, python_rust=empty_py,
+    )
+    assert code == 1, out
+    ladder = report["ladder"]
+    assert ladder == {
+        "upstream_test_cases": 5,
+        "mapped": 5,
+        "passing_rust_port_run": 5,
+        "passing_both": 0,
+        "min_method_coverage": 0.8,
+    }
+    assert "Coverage ladder:" in out
+    assert "...and passing in the Rust-port run" in out
+    # The line that tells the operator what to fix next.
+    assert "5 method(s) pass in the Rust-port run but not in CONSORTIUM_BACKEND=rust" in out
+
+
+def test_the_ladder_distinguishes_a_mapping_gap_from_a_run_gap(tmp_path):
+    write_upstream(ALL_GREEN, tmp_path)
+    # MAPPED covers TaskFooTest.test_a/test_b and TreeBarTest.test_c, and
+    # leaves UnrelatedTest.test_d unmapped. Nothing is unported mid-chain.
+    rust = rust_junit(["task::tests::test_a", "task::tests::test_b", "tree::tests::test_c"])
+    py = junit([("tests.TaskFooTest", "test_a", "pass"), ("tests.TaskFooTest", "test_b", "pass"),
+                ("tests.TreeBarTest", "test_c", "pass")])
+    code, out, report = run_gate(
+        tmp_path, mapping=MAPPED, rust_unit=rust, python_original=py, python_rust=py
+    )
+    ladder = report["ladder"]
+    assert ladder["upstream_test_cases"] == 4
+    assert ladder["mapped"] == 3
+    assert ladder["passing_rust_port_run"] == 3
+    assert ladder["passing_both"] == 3
+    # Full chain satisfied for what is mapped, so no "fix this leg" advice.
+    assert "that is the leg to fix next" not in out
+    assert "fail in the Rust-port leg" not in out
+
+
+def test_notes_are_printed_and_bounded(tmp_path):
+    """Notes used to be computed, shipped in the JSON, and never printed -- so
+    the most actionable fact the gate produces was invisible to anyone running
+    it."""
+    write_upstream({"BigTest": [f"test_{i:02d}" for i in range(40)]}, tmp_path)
+    mapping = '[upstream]\nrepo = "x"\n\n[BigTest]\n' + "".join(
+        f'test_{i:02d} = ["nope::tests::test_{i:02d}"]\n' for i in range(40)
+    )
+    py = junit([("tests.BigTest", f"test_{i:02d}", "pass") for i in range(40)])
+    code, out, report = run_gate(
+        tmp_path, mapping=mapping, rust_unit=rust_junit(["other::tests::x"]),
+        python_original=py, python_rust=py,
+    )
+    assert code == 1
+    assert "Notes (40 method-level findings):" in out
+    assert "\u2026 20 more (see --json-out)" in out
+    # The full set is always in the JSON, so nothing is lost by bounding stdout.
+    assert len(report["notes"]) == 40
+
+
+def test_note_wording_reads_as_english(tmp_path):
+    write_upstream(ALL_GREEN, tmp_path)
+    rust = rust_junit(["task::tests::test_a", "task::tests::test_b", "tree::tests::test_c",
+                       "misc::tests::test_d", "misc::tests::test_e"])
+    orig = py_all_pass({**ALL_GREEN, "UnrelatedTest": ["test_d", "test_e"]})
+    rust_py = orig.replace(
+        '<testcase classname="tests.MsgTreeTest" name="test_001_basics"/>',
+        '<testcase classname="tests.MsgTreeTest" name="test_001_basics"><failure message="x"/></testcase>',
+    )
+    if rust_py == orig:  # MsgTreeTest is not in this fixture; use TaskFooTest
+        rust_py = orig.replace(
+            '<testcase classname="tests.TaskFooTest" name="test_b"/>',
+            '<testcase classname="tests.TaskFooTest" name="test_b"><error message="x"/></testcase>',
+        )
+    code, out, report = run_gate(
+        tmp_path, mapping=MAPPED_ALL, rust_unit=rust,
+        python_original=orig, python_rust=rust_py,
+    )
+    assert code == 1
+    joined = "\n".join(report["notes"])
+    assert " failed in the CONSORTIUM_BACKEND=rust run" in joined or \
+           " errored in the CONSORTIUM_BACKEND=rust run" in joined
+    assert "but fail in" not in joined

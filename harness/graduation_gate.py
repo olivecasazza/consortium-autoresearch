@@ -383,10 +383,11 @@ def evaluate(
         py_orig_status = py_orig.get(m.key)
         covered = rust_ok and py_rust_status == "pass"
 
-        row = per_class.setdefault(m.cls, {"total": 0, "covered": 0, "mapped": 0})
+        row = per_class.setdefault(m.cls, {"total": 0, "covered": 0, "mapped": 0, "rust_ok": 0})
         row["total"] += 1
         row["mapped"] += int(is_mapped)
         row["covered"] += int(covered)
+        row["rust_ok"] += int(rust_ok)
 
         if missing_targets:
             notes.append(
@@ -396,11 +397,13 @@ def evaluate(
         if is_mapped and py_rust_status is None:
             notes.append(f"{m.key}: mapped but absent from the CONSORTIUM_BACKEND=rust run")
         elif py_rust_status is not None and py_rust_status != "pass":
-            notes.append(f"{m.key}: mapped but {py_rust_status} in the CONSORTIUM_BACKEND=rust run")
+            outcome = {"fail": "failed", "error": "errored", "skip": "was skipped"}[py_rust_status]
+            notes.append(f"{m.key}: mapped but {outcome} in the CONSORTIUM_BACKEND=rust run")
 
     total = len(methods)
     covered = sum(r["covered"] for r in per_class.values())
     mapped = sum(r["mapped"] for r in per_class.values())
+    rust_ok = sum(r["rust_ok"] for r in per_class.values())
     coverage = (covered / total) if total else 0.0
 
     # 1. coverage
@@ -494,7 +497,13 @@ def evaluate(
         )
     )
 
-    return checks, per_class
+    return checks, per_class, {
+        "upstream_test_cases": total,
+        "mapped": mapped,
+        "passing_rust_port_run": rust_ok,
+        "passing_both": covered,
+        "min_method_coverage": cfg.min_method_coverage,
+    }
 
 
 def main() -> int:
@@ -546,7 +555,7 @@ def main() -> int:
     load_failures = orig_fails + rust_fails + unit_fails
     problems.extend(load_failures)
 
-    checks, per_class = evaluate(
+    checks, per_class, ladder = evaluate(
         methods, mapping, py_orig, py_rust, rust_unit, cfg, exemptions,
         {"CONSORTIUM_BACKEND=python": orig_ce, "CONSORTIUM_BACKEND=rust": rust_ce},
         notes,
@@ -577,6 +586,30 @@ def main() -> int:
         print(f"         required: {c.required}")
         if c.detail:
             print(f"         detail:   {c.detail}")
+    print()
+
+    # Coverage is a three-way conjunction, so the single ratio cannot say which
+    # link in the chain is the short one. At 3.4% mapped and 0.0% covered, "0.0%"
+    # reads as "the porting stream has done nothing" when in fact the Rust work
+    # is largely done and the chain is severed further along. Say which.
+    total = ladder["upstream_test_cases"]
+    mapped, rust_ok, covered = ladder["mapped"], ladder["passing_rust_port_run"], ladder["passing_both"]
+    print("Coverage ladder:")
+    for label, count in (
+        ("upstream test cases", total),
+        ("mapped in TEST_MAPPING.toml", mapped),
+        ("  ...and passing in the Rust-port run", rust_ok),
+        ("  ...and passing in CONSORTIUM_BACKEND=rust", covered),
+    ):
+        pct = (count / total * 100) if total else 0.0
+        bar = "#" * int(round(pct / 5))
+        print(f"  {label:44s} {count:5d}  {pct:5.1f}%  {bar}")
+    if mapped and rust_ok < mapped:
+        print(f"  -> {mapped - rust_ok} mapped method(s) fail in the Rust-port leg; "
+              f"see Notes")
+    if rust_ok and covered < rust_ok:
+        print(f"  -> {rust_ok - covered} method(s) pass in the Rust-port run but not in "
+              f"CONSORTIUM_BACKEND=rust; that is the leg to fix next")
     print()
 
     if problems:
@@ -621,6 +654,7 @@ def main() -> int:
                     "approved_on": cfg.approved_on,
                     "issue": cfg.issue,
                     "methods_total": len(methods),
+                    "ladder": ladder,
                     "methods_covered": covered,
                     "checks": [
                         {
