@@ -334,6 +334,33 @@ output — which is what CI needs in order to gate a decision.
 protection required checks. Do that when the gate first reports `PASS`, at which
 point it is enforcing a floor the code has actually met.
 
+### Known prerequisite: the Rust-backend CI leg hangs before the gate runs
+
+The gate steps sit after both Python legs, so they cannot run until
+`Run Python tests (Rust backend)` finishes. On `master` at `24bf186` that step
+does not finish — it ran for over 40 minutes with no output on the PR run of
+[#22](https://github.com/olivecasazza/consortium-autoresearch/pull/22), where
+the same step takes **2.7 seconds locally**.
+
+The step passes `--timeout=30` but not `--timeout-method=thread`, so it uses
+pytest's default **signal-based** timeout. That is the known-hanging
+configuration: a signal cannot be delivered while the interpreter is inside a
+blocking call, and the `TreeWorkerTest` / `WorkerExecTest` / `TreeGatewayTest`
+cases drive real subprocesses and SSH. Locally, adding `--timeout-method=thread`
+was the difference between the full suite hanging indefinitely and finishing in
+85s.
+
+Before #19 the step did not hang, because the imports failed fast and it exited
+in seconds. #19 fixed the imports, which is progress, and is also what let it run
+far enough to hang. So this is not a regression in #19 — it is the next thing
+behind it.
+
+The fix is one flag on the `Run Python tests (Rust backend)` step, and it belongs
+to CON-116 rather than here: that step is a scorecard step, and CON-116 owns the
+Rust-backend leg. Until it lands, the gate's CI steps are blocked behind a hang
+and the numbers in "Current measurement" are the local ones, which were produced
+with the thread timeout.
+
 ## Reproducing the measurement
 
 ```console
