@@ -911,18 +911,37 @@ impl EventSink for LiveTreeRenderer {
     fn emit(&self, event: &CascadeEvent) {
         // Always update the in-memory tree.
         self.accumulator.emit(event);
-        // Repaint policy: force on Started (first frame must appear
-        // immediately) and Finished (final frame must always show).
-        // Every other event paints through the 60ms throttle gate so
-        // long rounds (e.g. cascading thousands of store paths) show
-        // mid-flight progress as edges flip from ⏸ → ⏵ → ✔, instead
-        // of staying static until RoundCompleted.
+        // Repaint policy, split by what each frame is for:
+        //
+        // - `PlanComputed` / `RoundCompleted` are the structural repaint
+        //   points: one throttled frame per round.
+        // - `Finished` forces a frame so the final state always lands.
+        // - `Started` and per-edge events only reach `repaint` in
+        //   production, where the 60ms throttle gate turns them into live
+        //   progress: the first frame (nothing has painted yet, so the
+        //   gate lets it through) and mid-round edges flipping
+        //   ⏸ → ⏵ → ✔ while thousands of store paths cascade, instead of
+        //   a static frame until the next `RoundCompleted`.
+        //
+        // Capture mode skips both. Capture bypasses the wall-time gate
+        // entirely (tests emit in µs), so every event became a frame —
+        // and an edge transition is only actually visible in its
+        // enclosing round's frame anyway, so the extra frames were
+        // adjacent repeats that doubled the escape-sequence count
+        // without adding information. Restricting capture to the
+        // structural points makes it emit exactly one frame per round,
+        // which is the contract the renderer tests assert.
         match event {
-            CascadeEvent::Started { .. } | CascadeEvent::Finished { .. } => {
+            CascadeEvent::PlanComputed { .. } | CascadeEvent::RoundCompleted { .. } => {
+                self.repaint(false);
+            }
+            CascadeEvent::Finished { .. } => {
                 self.repaint(true);
             }
             _ => {
-                self.repaint(false);
+                if self.capture.is_none() {
+                    self.repaint(false);
+                }
             }
         }
     }
