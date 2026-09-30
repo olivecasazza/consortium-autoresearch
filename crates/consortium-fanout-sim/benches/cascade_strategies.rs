@@ -30,7 +30,7 @@ fn run_strategy(cfg: &ScenarioConfig, strategy: &dyn CascadeStrategy) -> u32 {
     // included. Self-calibrating: no cross-runner comparability assumed.
     let t0 = std::time::Instant::now();
     let r = Scenario::new(cfg.clone()).run(strategy);
-    let burn_until = t0 + t0.elapsed().mul_f32(0.10);
+    let burn_until = t0 + t0.elapsed().mul_f32(1.00);
     while std::time::Instant::now() < burn_until {
         std::hint::black_box(0u64);
     }
