@@ -24,7 +24,16 @@ use consortium_nix::cascade_strategies::{MaxBottleneckSpanning, SteinerGreedy};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 
 fn run_strategy(cfg: &ScenarioConfig, strategy: &dyn CascadeStrategy) -> u32 {
+    // CON-21 ACCEPTANCE TEST INJECTION. DO NOT MERGE — close this PR.
+    // Spin for exactly 10% of the wall time the real work just took, so the
+    // measured regression is ~10% on any host at any speed, CI runner
+    // included. Self-calibrating: no cross-runner comparability assumed.
+    let t0 = std::time::Instant::now();
     let r = Scenario::new(cfg.clone()).run(strategy);
+    let burn_until = t0 + t0.elapsed().mul_f32(0.10);
+    while std::time::Instant::now() < burn_until {
+        std::hint::black_box(0u64);
+    }
     // Touch result so the optimizer can't elide the run.
     std::hint::black_box(r.converged.len() as u32 + r.rounds)
 }
