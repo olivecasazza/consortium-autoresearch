@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Deterministic simulator for the consortium cascade primitive"
+publish = false
 
 [dependencies]
 consortium-nix = { workspace = true }
