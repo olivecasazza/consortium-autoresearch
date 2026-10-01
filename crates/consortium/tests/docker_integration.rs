@@ -7,13 +7,17 @@
 
 #![cfg(feature = "docker-tests")]
 
-use std::sync::LazyLock;
-use std::time::Duration;
+use std::process::{Command, Stdio};
+use std::sync::{LazyLock, Mutex};
+use std::time::{Duration, Instant};
 
 use consortium::dag::*;
 use consortium::worker::exec::ExecWorker;
 use consortium::worker::Worker;
-use consortium_test_harness::{ClusterTopology, DockerCluster};
+use consortium_test_harness::{
+    delay_from_duration, rate_from_bytes_per_sec, ClusterTopology, DockerCluster, NetemProfile,
+    DEFAULT_IFACE,
+};
 
 /// Shared cluster — started once, used by all tests in this file.
 static CLUSTER: LazyLock<DockerCluster> = LazyLock::new(|| {
@@ -1619,5 +1623,375 @@ fn test_cross_host_dependency() {
     assert!(
         ctx.has_output(&TaskId(format!("activate:{}", db_host))),
         "db activate output missing — cross-host dep may not be working"
+    );
+}
+
+// ─── Network shaping (tc netem) Tests ───────────────────────────────────────
+//
+// These are the tests that make a CON-99 sim↔container calibration possible at
+// all, and they follow one rule: **assert the observed network, never that a
+// setup command returned 0.**
+//
+// The reason is concrete. `tc qdisc replace dev eth0 root netem` with no netem
+// options exits 0 and shapes nothing. A node without CAP_NET_ADMIN makes every
+// tc call fail. In both cases a harness that checks exit codes cheerfully
+// reports a shaped cluster that is unshaped, and every number measured
+// afterwards is a loopback number wearing a network costume. So each assertion
+// below is a measurement of something that had to cross the wire.
+//
+// Measurement path: host → published port → node's eth0 *ingress* (unshaped) →
+// remote command → the node's *response* → node's eth0 *egress* (shaped). A
+// root qdisc on eth0 shapes what the node sends, so a round trip measured from
+// the host pays an imposed delay, and an imposed bandwidth cap, exactly once —
+// in the response.
+
+/// The netem tests all shape one node, so they are serialised against each
+/// other. CI runs this file with `--test-threads=1`; this keeps the file honest
+/// under a plain `cargo test` too.
+static NETEM_LOCK: Mutex<()> = Mutex::new(());
+
+/// The node these tests shape.
+///
+/// `login-01` exists in `start_small()`'s topology and is used by no other test
+/// in this file, so even a leaked qdisc cannot perturb the rest of the lane.
+fn netem_probe_node(cluster: &DockerCluster) -> String {
+    cluster
+        .nodes_with_prefix("login")
+        .into_iter()
+        .next()
+        .expect("start_small() must provide a login node to shape")
+}
+
+/// Clears shaping on drop, so a failed assertion cannot leak a delay or a rate
+/// cap into the next test.
+struct NetemGuard<'a> {
+    cluster: &'a DockerCluster,
+    node: String,
+}
+
+impl<'a> NetemGuard<'a> {
+    fn new(cluster: &'a DockerCluster, node: &str) -> Self {
+        Self {
+            cluster,
+            node: node.to_string(),
+        }
+    }
+}
+
+impl Drop for NetemGuard<'_> {
+    fn drop(&mut self) {
+        if let Err(e) = self.cluster.clear_netem(&self.node, DEFAULT_IFACE) {
+            eprintln!("netem teardown failed on {}: {}", self.node, e);
+        }
+    }
+}
+
+/// A shell command on a node, reached over the host's published port — the same
+/// path every other test in this file uses.
+fn node_ssh_command(
+    cluster: &DockerCluster,
+    node: &str,
+    remote_cmd: &str,
+) -> std::result::Result<Command, String> {
+    let port = cluster
+        .port_for(node)
+        .ok_or_else(|| format!("no published port for {}", node))?;
+
+    let mut cmd = Command::new("ssh");
+    cmd.args([
+        "-oStrictHostKeyChecking=no",
+        "-oPasswordAuthentication=no",
+        "-oBatchMode=yes",
+        "-oConnectTimeout=10",
+        "-i",
+    ]);
+    cmd.arg(cluster.ssh_key_path());
+    cmd.arg("-p");
+    cmd.arg(port.to_string());
+    cmd.arg("root@127.0.0.1");
+    cmd.arg(remote_cmd);
+    Ok(cmd)
+}
+
+/// One host→node SSH round trip, timed end to end: process spawn, key exchange,
+/// remote command, response.
+fn timed_ssh(
+    cluster: &DockerCluster,
+    node: &str,
+    remote_cmd: &str,
+) -> std::result::Result<Duration, String> {
+    let start = Instant::now();
+    let output = node_ssh_command(cluster, node, remote_cmd)?
+        .output()
+        .map_err(|e| format!("ssh spawn: {}", e))?;
+    let elapsed = start.elapsed();
+
+    if !output.status.success() {
+        return Err(format!(
+            "ssh to {} failed: {}",
+            node,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(elapsed)
+}
+
+/// A timed bulk transfer: the remote command's stdout is discarded, but it still
+/// has to cross the node's shaped egress to get here.
+fn timed_transfer(
+    cluster: &DockerCluster,
+    node: &str,
+    remote_cmd: &str,
+) -> std::result::Result<Duration, String> {
+    let start = Instant::now();
+    let status = node_ssh_command(cluster, node, remote_cmd)?
+        .stdout(Stdio::null())
+        .status()
+        .map_err(|e| format!("ssh spawn: {}", e))?;
+    let elapsed = start.elapsed();
+
+    if !status.success() {
+        return Err(format!("transfer on {} exited {}", node, status));
+    }
+    Ok(elapsed)
+}
+
+/// Median of several round trips.
+///
+/// Median, not mean: one scheduling hiccup on a shared CI runner must not be
+/// able to decide whether shaping works. The first sample is a warm-up — a
+/// container's first SSH pays for cold caches, and that cost would otherwise
+/// land in whichever measurement the runner happened to schedule it into.
+fn median_round_trip(
+    cluster: &DockerCluster,
+    node: &str,
+    samples: usize,
+) -> std::result::Result<Duration, String> {
+    timed_ssh(cluster, node, "true")?;
+
+    let mut times = Vec::with_capacity(samples);
+    for _ in 0..samples {
+        times.push(timed_ssh(cluster, node, "true")?);
+    }
+    times.sort_unstable();
+    Ok(times[times.len() / 2])
+}
+
+#[test]
+fn test_netem_delay_shows_up_in_a_measured_round_trip() {
+    let _serial = NETEM_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let cluster = &*CLUSTER;
+    let node = netem_probe_node(cluster);
+    let _teardown = NetemGuard::new(cluster, &node);
+
+    // Precondition: `tc` is in the image. `command -v` is a shell builtin, so
+    // this does not depend on which tc build is installed or how it chooses to
+    // print its version. Whether `tc` actually *works* is settled by the
+    // measurement below, not by this.
+    let tc_path = cluster
+        .run_in_node(&node, "sh", &["-c", "command -v tc"])
+        .unwrap_or_else(|e| panic!("tc must be present in {}: {}", node, e));
+    assert!(
+        tc_path.contains("tc"),
+        "expected a path to tc, got {:?}",
+        tc_path.trim()
+    );
+
+    // The sim's per-edge latency is a Duration, so the profile is built with the
+    // same converter a calibration scenario would use.
+    const DELAY: Duration = Duration::from_millis(250);
+    let profile = NetemProfile::with_delay(delay_from_duration(DELAY));
+
+    let baseline = median_round_trip(cluster, &node, 5).expect("baseline round trips");
+
+    cluster
+        .apply_netem(&node, &profile, DEFAULT_IFACE)
+        .unwrap_or_else(|e| panic!("applying {:?} to {}: {}", profile, node, e));
+
+    let shaped = median_round_trip(cluster, &node, 5).expect("shaped round trips");
+
+    eprintln!(
+        "netem delay {}ms on {}: baseline {:?} -> shaped {:?}; qdisc: {}",
+        DELAY.as_millis(),
+        node,
+        baseline,
+        shaped,
+        cluster
+            .qdisc_show(&node, DEFAULT_IFACE)
+            .unwrap_or_default()
+            .trim()
+    );
+
+    // Every one of those responses left the node's eth0, so each paid the delay
+    // once. A round trip that is *not* slower by at least three quarters of the
+    // imposed delay means the qdisc was not in the path — whatever `tc qdisc
+    // show` says about it. The margin covers clock granularity on a busy runner
+    // without admitting a no-op, which would show up as roughly `baseline`.
+    assert!(
+        shaped >= baseline + DELAY * 3 / 4,
+        "a {}ms netem delay did not show up in a measured round trip: \
+         baseline {:?}, shaped {:?}",
+        DELAY.as_millis(),
+        baseline,
+        shaped
+    );
+}
+
+#[test]
+fn test_netem_rate_cap_shows_up_in_a_timed_transfer() {
+    let _serial = NETEM_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let cluster = &*CLUSTER;
+    let node = netem_probe_node(cluster);
+    let _teardown = NetemGuard::new(cluster, &node);
+
+    // 250_000 byte/s, expressed the way the sim stores bandwidth. The profile's
+    // rate string is produced by the harness's own converter, so this test
+    // exercises the sim→container mapping rather than restating it.
+    const RATE_BYTES_PER_SEC: u64 = 250_000;
+    const PAYLOAD_BYTES: u64 = 2 * 1024 * 1024;
+    let rate_string = rate_from_bytes_per_sec(RATE_BYTES_PER_SEC);
+    assert_eq!(
+        rate_string, "2mbit",
+        "250_000 byte/s must map to 2mbit — tc rate units are bits, and an 8x \
+         error here would shape the link eight times too tight"
+    );
+
+    let payload = format!("/tmp/netem-rate-payload-{}.bin", std::process::id());
+    let create = format!(
+        "dd if=/dev/zero of={} bs=65536 count={} 2>/dev/null",
+        payload,
+        PAYLOAD_BYTES / 65536
+    );
+    cluster
+        .run_in_node(&node, "sh", &["-c", &create])
+        .unwrap_or_else(|e| panic!("creating the payload on {}: {}", node, e));
+
+    // netem's default queue is 1000 packets. At 2mbit that is roughly 1.5MB of
+    // buffer, so a 2MB transfer overruns it and netem *drops* the overflow. The
+    // transfer would still finish — on TCP retransmits — and the measurement
+    // would be loss recovery rather than the rate that was asked for.
+    let profile = NetemProfile::with_rate(rate_string.clone()).limit("100000");
+    timed_ssh(cluster, &node, "true").expect("warm-up round trip");
+    let unshaped = timed_transfer(cluster, &node, &format!("cat {}", payload))
+        .expect("unshaped transfer of the payload");
+
+    cluster
+        .apply_netem(&node, &profile, DEFAULT_IFACE)
+        .unwrap_or_else(|e| panic!("applying {:?} to {}: {}", profile, node, e));
+
+    let shaped = timed_transfer(cluster, &node, &format!("cat {}", payload))
+        .expect("shaped transfer of the payload");
+
+    let _ = cluster.run_in_node(&node, "rm", &["-f", &payload]);
+
+    eprintln!(
+        "netem rate {} on {}: unshaped {:?} -> shaped {:?} for {} MiB; qdisc: {}",
+        rate_string,
+        node,
+        unshaped,
+        shaped,
+        PAYLOAD_BYTES / (1024 * 1024),
+        cluster
+            .qdisc_show(&node, DEFAULT_IFACE)
+            .unwrap_or_default()
+            .trim()
+    );
+
+    // A cap that is really in the path cannot move this payload faster than
+    // bytes/rate allows. Derived from the two constants rather than written as a
+    // literal, so it cannot drift away from them, and taken at three quarters so
+    // netem's token bucket has room to be imperfect.
+    let floor = Duration::from_secs_f64((PAYLOAD_BYTES as f64 / RATE_BYTES_PER_SEC as f64) * 0.75);
+    assert!(
+        shaped >= floor,
+        "a {} cap did not show up in a timed transfer: {} MiB in {:?}, which is \
+         faster than the {:.2}s the cap allows (3/4 of the {:.2}s minimum)",
+        rate_string,
+        PAYLOAD_BYTES / (1024 * 1024),
+        shaped,
+        floor.as_secs_f64(),
+        (PAYLOAD_BYTES as f64 / RATE_BYTES_PER_SEC as f64),
+    );
+    assert!(
+        shaped >= unshaped * 2,
+        "shaped transfer ({:?}) was not at least twice the unshaped one ({:?}) — \
+         the cap is not distinguishing itself from loopback",
+        shaped,
+        unshaped
+    );
+}
+
+#[test]
+fn test_netem_teardown_returns_the_node_to_unshaped() {
+    let _serial = NETEM_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let cluster = &*CLUSTER;
+    let node = netem_probe_node(cluster);
+    let _teardown = NetemGuard::new(cluster, &node);
+
+    const DELAY: Duration = Duration::from_millis(250);
+    let profile = NetemProfile::with_delay(delay_from_duration(DELAY));
+
+    let baseline = median_round_trip(cluster, &node, 5).expect("baseline round trips");
+
+    cluster
+        .apply_netem(&node, &profile, DEFAULT_IFACE)
+        .unwrap_or_else(|e| panic!("applying {:?} to {}: {}", profile, node, e));
+
+    // Establish that the node really is shaped before tearing it down —
+    // otherwise "teardown restored it" is indistinguishable from "teardown did
+    // nothing to a node that was never shaped".
+    let shaped = median_round_trip(cluster, &node, 5).expect("shaped round trips");
+    assert!(
+        shaped >= baseline + DELAY * 3 / 4,
+        "precondition: the node should be shaped before teardown, got baseline \
+         {:?} and shaped {:?}",
+        baseline,
+        shaped
+    );
+
+    cluster
+        .clear_netem(&node, DEFAULT_IFACE)
+        .expect("teardown must remove the shaping it applied");
+    // Idempotent by construction: clearing a node that is already clear is the
+    // common case for any test that never shaped it, and a teardown that fails
+    // there would either fail every such test or teach everyone to ignore it.
+    cluster
+        .clear_netem(&node, DEFAULT_IFACE)
+        .expect("teardown must be idempotent");
+
+    // The kernel default on a container's veth is `noqueue`, not `pfifo_fast`,
+    // so the invariant to assert is the absence of netem rather than the
+    // presence of any particular default qdisc.
+    let show = cluster
+        .qdisc_show(&node, DEFAULT_IFACE)
+        .expect("tc qdisc show must work after teardown");
+    assert!(
+        !show.contains("netem"),
+        "{} is still shaped after teardown: {}",
+        node,
+        show.trim()
+    );
+
+    // And the node is unshaped in the only sense that matters: fast again.
+    let recovered = median_round_trip(cluster, &node, 5).expect("recovered round trips");
+    eprintln!(
+        "netem teardown on {}: baseline {:?} -> shaped {:?} -> recovered {:?}; qdisc: {}",
+        node,
+        baseline,
+        shaped,
+        recovered,
+        show.trim()
+    );
+    assert!(
+        recovered <= baseline + DELAY * 3 / 4,
+        "teardown did not restore an unshaped node: baseline {:?}, recovered {:?}",
+        baseline,
+        recovered
     );
 }
