@@ -31,6 +31,13 @@ use std::time::{Duration, Instant};
 use consortium::worker::ssh::SshOptions;
 use consortium_nix::config::{DeploymentNode, FleetConfig, ProfileType};
 
+pub mod docker_cascade;
+
+pub use docker_cascade::{
+    compare_tiers, final_parent_chain, planned_edges, DockerCascadeExecutor,
+    DockerClusterTransport, EdgeTransport, RecordingTransport, SshHop, StructuralDelta,
+};
+
 /// Cluster topology configuration.
 #[derive(Debug, Clone)]
 pub struct ClusterTopology {
@@ -235,6 +242,16 @@ impl DockerCluster {
     /// Total number of nodes.
     pub fn node_count(&self) -> usize {
         self.node_ports.len()
+    }
+
+    /// Crate-root directory this cluster generated its keys and compose file in.
+    pub fn work_dir(&self) -> &Path {
+        &self.docker_dir
+    }
+
+    /// The topology this cluster was started with.
+    pub fn topology(&self) -> &ClusterTopology {
+        &self.topology
     }
 
     // ─── Internal ────────────────────────────────────────────────────────

@@ -136,6 +136,36 @@ pub fn deploy(
     ))
 }
 
+/// Cascade-specific knobs for [`deploy_with_cascade`].
+///
+/// Bundled so the cascade parameters travel as one value and the positional
+/// argument list of [`deploy_with_cascade`] stays readable.
+pub struct CascadeOptions<'a> {
+    /// Max concurrent copies in each cascade round.
+    pub fanout: u32,
+    /// Address of the seed node that starts the cascade.
+    pub seed_addr: &'a str,
+    /// Optional live-progress sink.
+    pub event_sink: Option<&'a dyn EventSink>,
+}
+
+impl<'a> CascadeOptions<'a> {
+    /// Cascade knobs with no live-progress sink.
+    pub fn new(fanout: u32, seed_addr: &'a str) -> Self {
+        Self {
+            fanout,
+            seed_addr,
+            event_sink: None,
+        }
+    }
+
+    /// Attach a live-progress sink.
+    pub fn events(mut self, sink: &'a dyn EventSink) -> Self {
+        self.event_sink = Some(sink);
+        self
+    }
+}
+
 /// Cascade-driven deploy: same eval/build/activate as [`deploy`], but
 /// the per-host `nix copy` stage is replaced by a single whole-fleet
 /// cascade that distributes each toplevel peer-to-peer.
@@ -156,7 +186,7 @@ pub fn deploy(
 /// 1. **DAG phase 1**: per-host eval + build (same as `deploy()`).
 /// 2. **Cascade phase**: collect built toplevels, group by toplevel,
 ///    run one `cascade_copy_grouped()` per group. Live UI via
-///    `event_sink` if provided.
+///    `cascade.event_sink` if provided.
 /// 3. **DAG phase 2**: per-host activate (only for hosts whose copy
 ///    succeeded; failed-copy hosts are reported as copy_failures).
 ///
@@ -172,10 +202,14 @@ pub fn deploy_with_cascade(
     action: DeployAction,
     max_parallel: usize,
     use_builders: bool,
-    cascade_fanout: u32,
-    seed_addr: &str,
-    event_sink: Option<&dyn EventSink>,
+    cascade: CascadeOptions<'_>,
 ) -> Result<DeployReport> {
+    let CascadeOptions {
+        fanout: cascade_fanout,
+        seed_addr,
+        event_sink,
+    } = cascade;
+
     // Build-only path: no copy, no cascade — defer to deploy().
     if action == DeployAction::Build {
         return deploy(config, target_nodes, action, max_parallel, use_builders);
@@ -448,11 +482,7 @@ pub fn deploy_with_cascade(
         .cloned()
         .collect();
 
-    let mut copy_failures: Vec<(String, String)> = cascade_result
-        .failed
-        .into_iter()
-        .map(|(h, e)| (h, e))
-        .collect();
+    let mut copy_failures: Vec<(String, String)> = cascade_result.failed.into_iter().collect();
     // Fold in per-host diff-copy failures from the second cascade phase.
     copy_failures.extend(copy_failures_extra);
 

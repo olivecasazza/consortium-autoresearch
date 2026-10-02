@@ -129,7 +129,7 @@ fn run_dshbak(lines: &[String], separator: &str, out: &mut impl Write) -> anyhow
     let mut groups: BTreeMap<Vec<u8>, NodeSet> = BTreeMap::new();
 
     for (message, keys) in tree.walk(None) {
-        let ns = groups.entry(message).or_insert_with(NodeSet::new);
+        let ns = groups.entry(message).or_default();
         for key in keys {
             let _ = ns.update_str(&key);
         }

@@ -114,8 +114,6 @@ pub fn eval_all(flake_uri: &str, hostnames: &[String]) -> Result<HashMap<String,
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn test_eval_toplevel_attr_format() {
         // Just verify the attribute path format is correct

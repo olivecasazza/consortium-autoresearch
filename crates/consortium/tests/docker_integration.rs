@@ -13,7 +13,13 @@ use std::time::Duration;
 use consortium::dag::*;
 use consortium::worker::exec::ExecWorker;
 use consortium::worker::Worker;
-use consortium_test_harness::{ClusterTopology, DockerCluster};
+use consortium_fanout_sim::{DeterministicExecutor, FailureSchedule};
+use consortium_nix::cascade::{run_cascade, Log2FanOut, NetworkProfile};
+use consortium_nix::cascade_trace::{CascadeTrace, TraceRecorder};
+use consortium_test_harness::{
+    final_parent_chain, planned_edges, ClusterTopology, DockerCascadeExecutor, DockerCluster,
+    StructuralDelta,
+};
 
 /// Shared cluster — started once, used by all tests in this file.
 static CLUSTER: LazyLock<DockerCluster> = LazyLock::new(|| {
@@ -697,6 +703,95 @@ fn test_scale_tag_based_gpu_selection() {
 }
 
 // ─── SCP Copy Tests ─────────────────────────────────────────────────────────
+
+#[test]
+fn test_cascade_structural_parity_with_sim() {
+    let cluster = &*CLUSTER;
+    let names = cluster.nodes_with_prefix("compute")[..5].to_vec();
+    let seed = &names[0];
+    let docker = DockerCascadeExecutor::from_cluster(cluster, &names, seed, FailureSchedule::None)
+        .expect("bind Docker cluster nodes to cascade executor");
+    docker
+        .stage_seed()
+        .expect("seed the cascade payload onto the seed container");
+
+    let nodes = docker.cascade_nodes();
+    let seeded = docker.seeded();
+    let strategy = Log2FanOut;
+    let net = NetworkProfile::default();
+    let sim = DeterministicExecutor::new(64 * 1024, FailureSchedule::None);
+
+    let sim_trace = TraceRecorder::new();
+    let sim_result = run_cascade(
+        nodes.clone(),
+        seeded.clone(),
+        net.clone(),
+        &strategy,
+        &sim,
+        16,
+        Some(&sim_trace),
+    );
+    let docker_trace = TraceRecorder::new();
+    let docker_result = run_cascade(
+        nodes.clone(),
+        seeded.clone(),
+        net.clone(),
+        &strategy,
+        &docker,
+        16,
+        Some(&docker_trace),
+    );
+    let sim_parents = final_parent_chain(&sim_trace);
+    let docker_parents = final_parent_chain(&docker_trace);
+    let mut all_nodes: Vec<_> = sim_parents
+        .keys()
+        .chain(docker_parents.keys())
+        .copied()
+        .collect();
+    all_nodes.sort();
+    all_nodes.dedup();
+    let parent_chain_diffs: Vec<_> = all_nodes
+        .into_iter()
+        .map(|id| {
+            (
+                id,
+                sim_parents.get(&id).copied(),
+                docker_parents.get(&id).copied(),
+            )
+        })
+        .filter(|(_, a, b)| a != b)
+        .collect();
+    let edge_diffs: Vec<_> = {
+        let sim_edges = planned_edges(&sim_trace);
+        let docker_edges = planned_edges(&docker_trace);
+        sim_edges
+            .iter()
+            .chain(docker_edges.iter())
+            .copied()
+            .filter(|e| sim_edges.contains(e) != docker_edges.contains(e))
+            .collect()
+    };
+    let delta = StructuralDelta {
+        rounds: i64::from(docker_result.rounds) - i64::from(sim_result.rounds),
+        parent_chain_diffs,
+        edge_diffs,
+    };
+
+    assert!(
+        delta.is_calibrated(),
+        "container cascade diverged from simulator: rounds delta={} parent_diffs={:?} edge_diffs={:?}\nSIM TRACE:\n{}\nDOCKER TRACE:\n{}",
+        delta.rounds,
+        delta.parent_chain_diffs,
+        delta.edge_diffs,
+        CascadeTrace::from_recorder("log2-fanout-sim", names.len() as u32, &sim_trace)
+            .to_ascii(None),
+        CascadeTrace::from_recorder("log2-fanout-docker", names.len() as u32, &docker_trace)
+            .to_ascii(None),
+    );
+    assert_eq!(docker_result.converged.len(), sim_result.converged.len());
+    assert_eq!(docker_result.rounds, sim_result.rounds);
+    assert_eq!(docker_result.failed.is_none(), sim_result.failed.is_none());
+}
 
 #[test]
 fn test_scp_file_copy_roundtrip() {

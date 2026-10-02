@@ -34,6 +34,30 @@ pub enum WorkerError {
 /// Result type alias for worker operations.
 pub type Result<T> = std::result::Result<T, WorkerError>;
 
+/// Per-node captured output chunks: node name -> chunks in arrival order.
+pub type NodeChunks = HashMap<String, Vec<Vec<u8>>>;
+
+/// What an [`EventHandler`] has buffered and not yet handed over.
+///
+/// Destructured by `Task::collect_results`; the three fields move independently
+/// into the task's stdout tree, stderr tree, and timed-out node set.
+#[derive(Debug, Default)]
+pub struct WorkerBuffers {
+    /// Captured stdout chunks, keyed by node name.
+    pub stdout: NodeChunks,
+    /// Captured stderr chunks, keyed by node name.
+    pub stderr: NodeChunks,
+    /// Nodes whose operation timed out.
+    pub timeouts: HashSet<String>,
+}
+
+impl WorkerBuffers {
+    /// Three empty collections.
+    pub fn empty() -> Self {
+        Self::default()
+    }
+}
+
 /// Current state of a worker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkerState {
@@ -79,14 +103,8 @@ pub trait EventHandler: Send {
     /// Extract buffered stdout/stderr data from this handler.
     /// Returns (stdout, stderr, timeouts) where stdout/stderr are node -> `Vec<chunks>`.
     /// Default returns empty maps. Used by Task to collect results after execution.
-    fn take_buffers(
-        &mut self,
-    ) -> (
-        HashMap<String, Vec<Vec<u8>>>,
-        HashMap<String, Vec<Vec<u8>>>,
-        HashSet<String>,
-    ) {
-        (HashMap::new(), HashMap::new(), HashSet::new())
+    fn take_buffers(&mut self) -> WorkerBuffers {
+        WorkerBuffers::empty()
     }
 }
 
@@ -158,8 +176,13 @@ mod tests {
     #[test]
     fn test_worker_state_clone() {
         let state = WorkerState::Pending;
-        let cloned = state.clone();
+        // Call the Clone impl explicitly — this test is about Clone, and
+        // `state.clone()` on a Copy type would just exercise Copy.
+        let cloned = WorkerState::clone(&state);
         assert_eq!(state, cloned);
+        // Copy and Clone must agree.
+        let copied: WorkerState = state;
+        assert_eq!(copied, cloned);
     }
 
     /// Test WorkerState is Copy

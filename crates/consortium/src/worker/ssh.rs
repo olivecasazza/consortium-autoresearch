@@ -396,6 +396,44 @@ pub struct ScpWorker {
     reverse: bool,
 }
 
+/// Direction-specific knobs for an [`ScpWorker`].
+///
+/// These travel together because they only mean anything together: `reverse`
+/// decides which side is local, and `preserve`/`directory` are the attribute
+/// and recursion flags for the same copy. Grouping them also keeps the
+/// `directory` / `preserve` pair from being swapped at a call site.
+#[derive(Debug, Clone, Default)]
+pub struct ScpTransfer {
+    /// If true, copy from remote to local.
+    pub reverse: bool,
+    /// If true, preserve file attributes.
+    pub preserve: bool,
+    /// If true, copy recursively.
+    pub directory: bool,
+}
+
+impl ScpTransfer {
+    /// A plain forward file copy with no attribute preservation.
+    pub fn forward() -> Self {
+        Self::default()
+    }
+
+    /// A forward recursive copy that preserves file attributes.
+    pub fn recursive() -> Self {
+        Self {
+            preserve: true,
+            directory: true,
+            ..Self::default()
+        }
+    }
+
+    /// Mark this copy as remote -> local.
+    pub fn reverse(mut self) -> Self {
+        self.reverse = true;
+        self
+    }
+}
+
 impl ScpWorker {
     /// Create a new ScpWorker for file copy.
     ///
@@ -406,9 +444,7 @@ impl ScpWorker {
     /// * `fanout` - Max concurrent SCP operations.
     /// * `timeout` - Optional per-node timeout.
     /// * `ssh_options` - SSH/SCP options.
-    /// * `reverse` - If true, copy from remote to local.
-    /// * `preserve` - If true, preserve file attributes.
-    /// * `directory` - If true, copy recursively.
+    /// * `transfer` - Direction, attribute-preservation and recursion flags.
     pub fn new(
         nodes: Vec<String>,
         source: String,
@@ -416,10 +452,13 @@ impl ScpWorker {
         fanout: usize,
         timeout: Option<Duration>,
         ssh_options: SshOptions,
-        reverse: bool,
-        preserve: bool,
-        directory: bool,
+        transfer: ScpTransfer,
     ) -> Self {
+        let ScpTransfer {
+            reverse,
+            preserve,
+            directory,
+        } = transfer;
         // Build SCP command with %h placeholder for node substitution
         let scp_cmd = ssh_options.build_scp_cmd("%h", &source, &dest, reverse, preserve, directory);
 
@@ -639,9 +678,10 @@ mod tests {
             64,
             None,
             opts,
-            false,
-            true,
-            false,
+            ScpTransfer {
+                preserve: true,
+                ..ScpTransfer::forward()
+            },
         );
 
         assert_eq!(worker.state(), WorkerState::Pending);
@@ -661,9 +701,7 @@ mod tests {
             64,
             None,
             opts,
-            true,
-            false,
-            false,
+            ScpTransfer::forward().reverse(),
         );
 
         assert!(worker.is_reverse());
