@@ -214,10 +214,29 @@ proptest! {
         }
 
         // Tightened: when KillNodeAtRound was injected with round=0,
-        // the killed node MUST appear in the failure tree (it can never
-        // receive the closure since every attempt to copy to it fails
-        // from round 0). Older test was silent about this — would have
-        // passed even if the kill schedule was being ignored.
+        // the kill schedule must not be silently ignored. The invariant
+        // takes one of two shapes depending on whether the killed node
+        // is the pre-seeded coordinator:
+        //
+        // - `killed == NodeId(0)`: `seed_fraction` is always 0.0 above,
+        //   so the seed distribution is `SeedDistribution::Single` and
+        //   the only pre-seeded node is `NodeId(0)`. Seeds are never
+        //   copy targets — `DeterministicExecutor::dispatch` only sees
+        //   edges the strategy actually assigns, and every strategy
+        //   filters `!state.has_closure.contains(&tgt)` out of its
+        //   target set. So `KillNodeAtRound { node: NodeId(0), round: 0 }`
+        //   matches no edge and is a legitimate no-op: the run must
+        //   succeed and the seed must be converged. Asserting the
+        //   opposite (the pre-3a344f8 shape) is unsatisfiable here.
+        // - `killed != NodeId(0)`: a non-seed node that converged was
+        //   necessarily targeted by some edge, and every edge into it
+        //   fails from round 0, so it must NOT be converged and must
+        //   appear in the failure tree. If it converged anyway, the
+        //   kill schedule is being ignored.
+        //
+        // This keeps the 3a344f8 tightening: the assertion is not
+        // deleted, it now distinguishes "schedule ignored" from
+        // "never a target" instead of conflating them.
         if let Some(killed) = killed_node {
             // Only assert when the kill could actually have fired:
             // round 0 means it fires on first attempt regardless of
@@ -225,23 +244,33 @@ proptest! {
             // before then (which is valid for Steiner on uniform).
             // We check the schedule's round via re-extraction:
             if let FailureSchedule::KillNodeAtRound { round: 0, .. } = cfg.failures {
-                prop_assert!(
-                    !result.converged.iter().any(|&n| n == killed),
-                    "[{}] killed node {killed:?} still appears in converged set: {:?}",
-                    strategy.name(),
-                    result.converged,
-                );
-                let err = result.failed.as_ref().unwrap_or_else(|| {
-                    panic!(
-                        "[{}] killed node injected at round 0 but result.failed is None",
-                        strategy.name()
-                    )
-                });
-                prop_assert!(
-                    err.affected_nodes().contains(&killed),
-                    "[{}] killed node {killed:?} missing from affected set",
-                    strategy.name(),
-                );
+                if killed == NodeId(0) {
+                    // Kill-the-seed is a no-op: seeds are never targets.
+                    prop_assert!(
+                        result.is_success(),
+                        "[{}] killed node {killed:?} is the pre-seeded coordinator; killing it should be a harmless no-op but the run failed: {:?}",
+                        strategy.name(),
+                        result.failed,
+                    );
+                } else {
+                    prop_assert!(
+                        !result.converged.iter().any(|&n| n == killed),
+                        "[{}] killed node {killed:?} still appears in converged set: {:?}",
+                        strategy.name(),
+                        result.converged,
+                    );
+                    let err = result.failed.as_ref().unwrap_or_else(|| {
+                        panic!(
+                            "[{}] killed node injected at round 0 but result.failed is None",
+                            strategy.name()
+                        )
+                    });
+                    prop_assert!(
+                        err.affected_nodes().contains(&killed),
+                        "[{}] killed node {killed:?} missing from affected set",
+                        strategy.name(),
+                    );
+                }
             }
         }
     }
@@ -276,5 +305,96 @@ proptest! {
         let s1: HashSet<NodeId> = r1.converged.iter().copied().collect();
         let s2: HashSet<NodeId> = r2.converged.iter().copied().collect();
         prop_assert_eq!(s1, s2, "converged sets diverge between identical-seed runs");
+    }
+}
+
+// ============================================================================
+// Named regressions for the round-0 kill invariant
+// ============================================================================
+
+/// `KillNodeAtRound { node: NodeId(0), round: 0 }` matches no edge, because
+/// `SeedDistribution::Single` pre-seeds `NodeId(0)` and no strategy ever
+/// emits an assignment *into* a node that already has the closure. So the
+/// kill is a no-op and the cascade must succeed with every node converged.
+///
+/// This is the exact minimal input that the proptest above reported on
+/// `origin/master` (CON-399): `seed = 3220180547`, `n_nodes = 35`,
+/// `Uniform(1045235754)`, `strategy_idx = 2` (steiner-greedy),
+/// `failure_seed = 12215865395898793738`. It is pinned here as a named test
+/// so the invariant is covered deterministically, not only when proptest
+/// happens to re-sample it.
+#[test]
+fn killing_the_pre_seeded_coordinator_is_a_no_op() {
+    let cfg = ScenarioConfig {
+        seed: 3220180547,
+        n_nodes: 35,
+        seed_fraction: 0.0,
+        closure_bytes: 10 * 1024 * 1024,
+        bandwidth: BandwidthDistribution::Uniform(1045235754),
+        uplinks: None,
+        failures: FailureSchedule::KillNodeAtRound {
+            node: NodeId(0),
+            round: 0,
+        },
+        max_rounds: 64,
+    };
+    let strategies: [&dyn CascadeStrategy; 3] =
+        [&Log2FanOut, &MaxBottleneckSpanning, &SteinerGreedy];
+    for strategy in strategies {
+        let result = Scenario::new(cfg.clone()).run(strategy);
+        assert!(
+            result.is_success(),
+            "[{}] killing the pre-seeded coordinator should be a harmless no-op, got: {:?}",
+            strategy.name(),
+            result.failed,
+        );
+        assert_eq!(
+            result.converged.len(),
+            cfg.n_nodes as usize,
+            "[{}] all nodes should converge when the kill never matches an edge",
+            strategy.name(),
+        );
+    }
+}
+
+/// The complement of the test above: a round-0 kill on a node that is *not*
+/// the seed IS a real failure, and that invariant must keep holding. The
+/// coordinator marks the target permanently failed (Activation is not
+/// transient) and it never enters the converged set.
+#[test]
+fn round_zero_kill_on_a_non_seed_node_is_honoured() {
+    let killed = NodeId(7);
+    let cfg = ScenarioConfig {
+        seed: 3220180547,
+        n_nodes: 35,
+        seed_fraction: 0.0,
+        closure_bytes: 10 * 1024 * 1024,
+        bandwidth: BandwidthDistribution::Uniform(1045235754),
+        uplinks: None,
+        failures: FailureSchedule::KillNodeAtRound {
+            node: killed,
+            round: 0,
+        },
+        max_rounds: 64,
+    };
+    let strategies: [&dyn CascadeStrategy; 3] =
+        [&Log2FanOut, &MaxBottleneckSpanning, &SteinerGreedy];
+    for strategy in strategies {
+        let result = Scenario::new(cfg.clone()).run(strategy);
+        assert!(
+            !result.converged.contains(&killed),
+            "[{}] node killed at round 0 must not appear in the converged set: {:?}",
+            strategy.name(),
+            result.converged,
+        );
+        let err = result
+            .failed
+            .as_ref()
+            .unwrap_or_else(|| panic!("[{}] expected a failure tree, got None", strategy.name()));
+        assert!(
+            err.affected_nodes().contains(&killed),
+            "[{}] node killed at round 0 must appear in the failure tree: {err:?}",
+            strategy.name(),
+        );
     }
 }
