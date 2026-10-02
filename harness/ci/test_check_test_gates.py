@@ -187,6 +187,114 @@ class UnreachableTestStepAudit(unittest.TestCase):
             self.assertEqual(gates.audit_unreachable_test_steps(path), [])
 
 
+class HashFilesSelfHostedAudit(unittest.TestCase):
+    """CON-415: `hashFiles()` aborts a whole self-hosted job at template time."""
+
+    def test_flags_hash_files_in_self_hosted_job(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write(
+                Path(tmp),
+                "ci.yml",
+                "jobs:\n"
+                "  tool-integration:\n"
+                "    runs-on: nix-builder\n"
+                "    steps:\n"
+                "      - name: Cache cargo\n"
+                "        uses: actions/cache@v4\n"
+                "        with:\n"
+                "          key: ${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}\n",
+            )
+            problems = gates.audit_hash_files_on_self_hosted(path)
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("hashFiles() in self-hosted job 'tool-integration'", problems[0])
+        self.assertIn("ci.yml:8", problems[0])
+
+    def test_allows_hash_files_on_github_hosted_job(self) -> None:
+        """GitHub-hosted runners ship node20, so the same call is fine there."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write(
+                Path(tmp),
+                "ci.yml",
+                "jobs:\n"
+                "  unit:\n"
+                "    runs-on: ubuntu-latest\n"
+                "    steps:\n"
+                "      - name: Cache cargo\n"
+                "        uses: actions/cache@v4\n"
+                "        with:\n"
+                "          key: ${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}\n",
+            )
+            self.assertEqual(gates.audit_hash_files_on_self_hosted(path), [])
+
+    def test_flags_self_hosted_label(self) -> None:
+        """`self-hosted` is the label the pool is addressed by directly."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write(
+                Path(tmp),
+                "ci.yml",
+                "jobs:\n"
+                "  a:\n"
+                "    runs-on: self-hosted\n"
+                "    steps:\n"
+                "      - run: echo ${{ hashFiles('a') }}\n",
+            )
+            problems = gates.audit_hash_files_on_self_hosted(path)
+        self.assertEqual(len(problems), 1, problems)
+
+    def test_does_not_carry_self_hosted_status_across_jobs(self) -> None:
+        """A GitHub-hosted job after a self-hosted one must not inherit it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write(
+                Path(tmp),
+                "ci.yml",
+                "jobs:\n"
+                "  a:\n"
+                "    runs-on: nix-builder\n"
+                "    steps:\n"
+                "      - run: echo hi\n"
+                "  b:\n"
+                "    runs-on: ubuntu-latest\n"
+                "    steps:\n"
+                "      - run: echo ${{ hashFiles('a') }}\n",
+            )
+            self.assertEqual(gates.audit_hash_files_on_self_hosted(path), [])
+
+    def test_ignores_hash_files_mentioned_in_a_comment(self) -> None:
+        """The explanation of this trap must not itself trip the audit."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write(
+                Path(tmp),
+                "ci.yml",
+                "jobs:\n"
+                "  a:\n"
+                "    runs-on: nix-builder\n"
+                "    steps:\n"
+                "      # CON-415: hashFiles() is expanded via the runner's node20.\n"
+                "      - run: echo hi\n",
+            )
+            self.assertEqual(gates.audit_hash_files_on_self_hosted(path), [])
+
+    def test_replaced_cache_key_is_clean(self) -> None:
+        """The shipped fix: hash in a `run:` step, pass via $GITHUB_OUTPUT."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write(
+                Path(tmp),
+                "ci.yml",
+                "jobs:\n"
+                "  tool-integration:\n"
+                "    runs-on: nix-builder\n"
+                "    steps:\n"
+                "      - name: Compute cargo cache key\n"
+                "        id: cargo-cache-key\n"
+                "        run: echo \"key=x-$(sha256sum Cargo.lock)\" >> \"$GITHUB_OUTPUT\"\n"
+                "      - name: Cache cargo\n"
+                "        uses: actions/cache@v4\n"
+                "        with:\n"
+                "          key: ${{ steps.cargo-cache-key.outputs.key }}\n",
+            )
+            self.assertEqual(gates.audit_hash_files_on_self_hosted(path), [])
+
+
 class RetiredWorkflowAudit(unittest.TestCase):
     """ADR 0002: a retired workflow must not come back quietly."""
 
@@ -215,6 +323,7 @@ class RepoWorkflows(unittest.TestCase):
         for pattern in gates.WORKFLOW_GLOBS:
             for path in sorted(workflow_dir.glob(pattern)):
                 problems.extend(gates.audit_pr_trigger(path))
+                problems.extend(gates.audit_hash_files_on_self_hosted(path))
         # Swallow tokens are gated on the two real gates; every other workflow
         # is covered by the `--all` sweep, which CI does not run by design.
         for name in gates.DEFAULT_WORKFLOWS:
@@ -237,6 +346,21 @@ class RepoWorkflows(unittest.TestCase):
             target = Path(tmp)
             (target / "ci.yml").write_text(
                 "jobs:\n  a:\n    steps:\n      - run: pytest tests/ || true\n"
+            )
+            (target / "migration-scorecard.yml").write_text("jobs:\n  a:\n    steps: []\n")
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(gates.main(["prog", str(target)]), 1)
+
+    def test_default_audit_gates_on_a_hash_files_workflow(self) -> None:
+        """`main()` must surface the CON-415 finding, not just the helper."""
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp)
+            (target / "ci.yml").write_text(
+                "jobs:\n"
+                "  a:\n"
+                "    runs-on: nix-builder\n"
+                "    steps:\n"
+                "      - run: echo ${{ hashFiles('Cargo.lock') }}\n"
             )
             (target / "migration-scorecard.yml").write_text("jobs:\n  a:\n    steps: []\n")
             with contextlib.redirect_stdout(io.StringIO()):
