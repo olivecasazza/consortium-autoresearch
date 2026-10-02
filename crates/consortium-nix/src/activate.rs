@@ -147,12 +147,12 @@ mod tests {
     #[test]
     fn test_profile_set_only_for_switch_and_boot() {
         // Verify all DeployAction variants are accounted for in the match.
-        let no_profile_actions = vec![
+        let no_profile_actions = [
             DeployAction::Test,
             DeployAction::DryActivate,
             DeployAction::Build,
         ];
-        let profile_actions = vec![DeployAction::Switch, DeployAction::Boot];
+        let profile_actions = [DeployAction::Switch, DeployAction::Boot];
         assert_eq!(no_profile_actions.len() + profile_actions.len(), 5);
     }
 

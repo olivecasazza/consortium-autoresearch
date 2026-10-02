@@ -50,23 +50,18 @@ impl TaskOutcome {
 }
 
 /// Error handling policy for the DAG executor.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum ErrorPolicy {
     /// Stop all execution on first failure.
     FailFast,
     /// Cancel tasks that depend on the failed task, continue independent branches.
+    #[default]
     ContinueIndependent,
     /// Retry up to N times, then apply fallback policy.
     Retry {
         max_retries: u32,
         fallback: Box<ErrorPolicy>,
     },
-}
-
-impl Default for ErrorPolicy {
-    fn default() -> Self {
-        ErrorPolicy::ContinueIndependent
-    }
 }
 
 /// Concurrency limit for a group of tasks.

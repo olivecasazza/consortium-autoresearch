@@ -485,20 +485,20 @@ mod tests {
         writeln!(f, "fanout = 128").unwrap();
         writeln!(f, "connect_timeout = 30.0").unwrap();
         writeln!(f, "debug = true").unwrap();
-        writeln!(f, "").unwrap();
+        writeln!(f).unwrap();
         writeln!(f, "[task.default]").unwrap();
         writeln!(f, "stderr = true").unwrap();
         writeln!(f, "engine = select").unwrap();
         writeln!(f, "distant_workername = rsh").unwrap();
-        writeln!(f, "").unwrap();
+        writeln!(f).unwrap();
         writeln!(f, "[nodeset]").unwrap();
         writeln!(f, "fold_axis = 1,2,3").unwrap();
-        writeln!(f, "").unwrap();
+        writeln!(f).unwrap();
         writeln!(f, "[engine]").unwrap();
         writeln!(f, "port_qlimit = 200").unwrap();
         drop(f);
 
-        let d = Defaults::from_config(&[conf_path.clone()]);
+        let d = Defaults::from_config(std::slice::from_ref(&conf_path));
         assert_eq!(d.fanout(), 128);
         assert_eq!(d.connect_timeout(), 30.0);
         assert!(d.debug());
@@ -535,9 +535,12 @@ mod tests {
 
     #[test]
     fn test_config_value_accessors() {
-        assert_eq!(ConfigValue::Bool(true).as_bool(), true);
+        assert!(ConfigValue::Bool(true).as_bool());
         assert_eq!(ConfigValue::Int(42).as_int(), 42);
-        assert_eq!(ConfigValue::Float(3.14).as_float(), 3.14);
+        assert_eq!(
+            ConfigValue::Float(std::f64::consts::PI).as_float(),
+            std::f64::consts::PI
+        );
         assert_eq!(ConfigValue::Int(42).as_float(), 42.0);
         assert_eq!(ConfigValue::Str("hello".into()).as_str(), "hello");
         assert_eq!(

@@ -120,32 +120,45 @@ mod tests {
     /// 3. Storing multiple handlers in a Vec<dyn EventHandler>
     #[test]
     fn test_object_safety() {
+        // Each handler records into its own shared cell, so the assertions can
+        // read what happened through the trait object rather than by holding a
+        // concrete handle the caller no longer owns.
+        // EventHandler: Send, so the shared state must be Arc, not Rc.
+        let starts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let reads = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+
         struct Handler1 {
-            pub count: usize,
+            starts: std::sync::Arc<std::sync::atomic::AtomicUsize>,
         }
 
         impl EventHandler for Handler1 {
             fn ev_start(&mut self, _worker: &dyn Any) {
-                self.count += 1;
+                self.starts
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             }
         }
 
         struct Handler2 {
-            pub messages: Vec<String>,
+            reads: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
         }
 
         impl EventHandler for Handler2 {
             fn ev_read(&mut self, _worker: &dyn Any, node: &str, sname: &str, msg: &str) {
-                self.messages.push(format!("{}:{}:{}", node, sname, msg));
+                self.reads
+                    .lock()
+                    .unwrap()
+                    .push(format!("{}:{}:{}", node, sname, msg));
             }
         }
 
         // This demonstrates object safety - we can store different handler types
         // in a Vec of trait objects
         let mut handlers: Vec<Box<dyn EventHandler>> = Vec::new();
-        handlers.push(Box::new(Handler1 { count: 0 }));
+        handlers.push(Box::new(Handler1 {
+            starts: starts.clone(),
+        }));
         handlers.push(Box::new(Handler2 {
-            messages: Vec::new(),
+            reads: reads.clone(),
         }));
 
         // Call ev_start on all handlers
@@ -160,10 +173,18 @@ mod tests {
 
         // The fact that we can compile and run this code proves that
         // EventHandler is object-safe. The trait object can be used
-        // polymorphically.
-        assert!(
-            true,
-            "Object safety test passed - Box<dyn EventHandler> works"
+        // polymorphically — assert the calls actually reached each concrete
+        // handler through the `dyn EventHandler` indirection.
+        assert_eq!(handlers.len(), 2);
+        assert_eq!(
+            starts.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "ev_start should reach the single handler that implements it"
+        );
+        assert_eq!(
+            reads.lock().unwrap().as_slice(),
+            ["node1:stdout:test"],
+            "ev_read should reach the handler that implements it"
         );
     }
 

@@ -7,7 +7,7 @@ struct N {
     kids: Vec<N>,
 }
 impl N {
-    fn n(s: &str) -> Self {
+    fn leaf(s: &str) -> Self {
         Self {
             label: s.into(),
             status: None,
@@ -44,31 +44,31 @@ impl TreeNode for N {
 }
 
 fn main() {
-    let cascade = N::n("seir (build host)")
+    let cascade = N::leaf("seir (build host)")
         .st(NodeStatus::Ok)
         .m("round", "0")
         .k(vec![
-            N::n("hp01")
+            N::leaf("hp01")
                 .st(NodeStatus::Ok)
                 .m("round", "1")
                 .m("dur", "12ms")
                 .k(vec![
-                    N::n("mm01")
+                    N::leaf("mm01")
                         .st(NodeStatus::Ok)
                         .m("round", "2")
-                        .k(vec![N::n("mm05").st(NodeStatus::Ok).m("round", "3")]),
-                    N::n("mm02").st(NodeStatus::InProgress).m("round", "2"),
+                        .k(vec![N::leaf("mm05").st(NodeStatus::Ok).m("round", "3")]),
+                    N::leaf("mm02").st(NodeStatus::InProgress).m("round", "2"),
                 ]),
-            N::n("hp02")
+            N::leaf("hp02")
                 .st(NodeStatus::Ok)
                 .m("round", "1")
                 .m("dur", "18ms")
                 .k(vec![
-                    N::n("hp03")
+                    N::leaf("hp03")
                         .st(NodeStatus::Failed)
                         .m("round", "2")
                         .m("err", "disk-full"),
-                    N::n("contra").st(NodeStatus::Pending),
+                    N::leaf("contra").st(NodeStatus::Pending),
                 ]),
         ]);
 

@@ -321,10 +321,10 @@ mod tests {
         ];
         let running = ["PENDING", "RUNNING", "COMPLETING"];
 
-        for state in &terminal_failure {
+        for &state in &terminal_failure {
             assert!(
                 matches!(
-                    state.as_ref(),
+                    state,
                     "FAILED" | "CANCELLED" | "TIMEOUT" | "OUT_OF_MEMORY" | "NODE_FAIL"
                 ),
                 "{} should be terminal failure",
@@ -332,10 +332,10 @@ mod tests {
             );
         }
 
-        for state in &running {
+        for &state in &running {
             assert!(
                 !matches!(
-                    state.as_ref(),
+                    state,
                     "COMPLETED"
                         | "FAILED"
                         | "CANCELLED"

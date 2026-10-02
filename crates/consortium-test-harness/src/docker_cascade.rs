@@ -1,6 +1,8 @@
 //! A container-side [`RoundExecutor`] so the Docker tier can run a cascade.
 //!
-//! [`run_cascade`] and [`run_cascade_with_events`] are generic over
+//! [`run_cascade`](consortium_nix::cascade::run_cascade) and
+//! [`run_cascade_with_events`](consortium_nix::cascade::run_cascade_with_events)
+//! are generic over
 //! `&dyn RoundExecutor`, so a Docker-side executor needs no new abstraction —
 //! only an implementation of the one trait method. That is what this module
 //! provides, plus the failure-injection parity that makes the two tiers
