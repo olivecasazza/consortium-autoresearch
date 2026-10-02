@@ -294,6 +294,33 @@ jobs:
             exit 1
           fi
 
+      # CON-415: `hashFiles()` is not evaluated by the workflow engine. The
+      # runner evaluates it itself, by spawning `externals/node20/bin/node` out
+      # of its own install root. Nixpkgs' `github-runner` dropped node20 from
+      # the store once node20 reached EOL, so that binary does not exist on the
+      # self-hosted `nix-builder` pool, and one `hashFiles()` call anywhere in
+      # the job aborts the *entire* job at template-evaluation time -- before
+      # any step runs, and regardless of which step contains the call.
+      #
+      # That is why this used to look like "the runner cannot start": steps 1-4
+      # did run. The `node20` path the error names is the hashFiles interpreter,
+      # not the JS-action runtime. JS actions are fine -- the same runner force-
+      # upgrades `using: node20` actions to the node24 it does ship.
+      #
+      # Hash the lock file in a `run:` step instead, which uses the job shell.
+      - name: Compute cargo cache key
+        id: cargo-cache-key
+        run: |
+          # A silently-empty cache key makes actions/cache skip the save, so fail
+          # loudly rather than shipping a job that quietly never caches again.
+          if [ ! -f Cargo.lock ]; then
+            echo "::error::Cargo.lock is missing; cannot compute a cache key."
+            exit 1
+          fi
+          HASH=$(sha256sum Cargo.lock | cut -c1-16)
+          echo "cargo cache key : ${RUNNER_OS}-cargo-tool-${HASH}" >> "$GITHUB_STEP_SUMMARY"
+          echo "key=${RUNNER_OS}-cargo-tool-${HASH}" >> "$GITHUB_OUTPUT"
+
       - name: Cache cargo
         uses: actions/cache@v4
         with:
@@ -301,7 +328,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-tool-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ steps.cargo-cache-key.outputs.key }}
 
       - name: Generate SSH keys for test containers
         run: |
