@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["GroupError","GroupResolverConfigError","GroupResolverSourceError","GroupSourceError"],"struct":["GroupResolver","GroupResolverConfig","StaticGroupSource","UpcallGroupSource"],"trait":["GroupSource"],"type":["Result"]};

@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["docker_available"],"struct":["ClusterTopology","DockerCluster"]};
+window.SIDEBAR_ITEMS = {"fn":["docker_available"],"mod":["docker_cascade"],"struct":["ClusterTopology","DockerCluster"]};

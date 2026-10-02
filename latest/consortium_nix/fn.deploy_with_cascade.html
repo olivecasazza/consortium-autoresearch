@@ -1,0 +1,35 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Cascade-driven deploy: same eval/build/activate as `deploy`, but the per-host `nix copy` stage is replaced by a single whole-fleet cascade that distributes each toplevel peer-to-peer."><title>deploy_with_cascade in consortium_nix - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../static.files/rustdoc-77263533.css"><meta name="rustdoc-vars" data-root-path="../" data-static-root-path="../static.files/" data-current-crate="consortium_nix" data-themes="" data-resource-suffix="" data-rustdoc-version="1.94.1 (e408947bf 2026-03-25)" data-channel="1.94.1" data-search-js="search-9e2438ea.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-c38705f0.js" ><script src="../static.files/storage-e2aeef58.js"></script><script defer src="sidebar-items.js"></script><script defer src="../static.files/main-7bab91a1.js"></script><noscript><link rel="stylesheet" href="../static.files/noscript-ffcac47a.css"></noscript><link rel="alternate icon" type="image/png" href="../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../static.files/favicon-044be391.svg"></head><body class="rustdoc fn"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">deploy_with_cascade</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../consortium_nix/index.html">consortium_<wbr>nix</a><span class="version">0.1.0</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">deploy_<wbr>with_<wbr>cascade</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#why" title="Why">Why</a></li><li><a href="#how" title="How">How</a></li><li><a href="#when-not-to-use" title="When NOT to use">When NOT to use</a></li></ul></section><div id="rustdoc-modnav"><h2 class="in-crate"><a href="index.html">In crate consortium_<wbr>nix</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="index.html">consortium_nix</a></div><h1>Function <span class="fn">deploy_<wbr>with_<wbr>cascade</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../src/consortium_nix/lib.rs.html#199-516">Source</a> </span></div><pre class="rust item-decl"><code>pub fn deploy_with_cascade(
+    config: &amp;<a class="struct" href="config/struct.FleetConfig.html" title="struct consortium_nix::config::FleetConfig">FleetConfig</a>,
+    target_nodes: &amp;[<a class="struct" href="https://doc.rust-lang.org/1.94.1/alloc/string/struct.String.html" title="struct alloc::string::String">String</a>],
+    action: <a class="enum" href="config/enum.DeployAction.html" title="enum consortium_nix::config::DeployAction">DeployAction</a>,
+    max_parallel: <a class="primitive" href="https://doc.rust-lang.org/1.94.1/std/primitive.usize.html">usize</a>,
+    use_builders: <a class="primitive" href="https://doc.rust-lang.org/1.94.1/std/primitive.bool.html">bool</a>,
+    cascade: <a class="struct" href="struct.CascadeOptions.html" title="struct consortium_nix::CascadeOptions">CascadeOptions</a>&lt;'_&gt;,
+) -&gt; <a class="type" href="error/type.Result.html" title="type consortium_nix::error::Result">Result</a>&lt;<a class="struct" href="struct.DeployReport.html" title="struct consortium_nix::DeployReport">DeployReport</a>&gt;</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Cascade-driven deploy: same eval/build/activate as <a href="fn.deploy.html" title="fn consortium_nix::deploy"><code>deploy</code></a>, but
+the per-host <code>nix copy</code> stage is replaced by a single whole-fleet
+cascade that distributes each toplevel peer-to-peer.</p>
+<h3 id="why"><a class="doc-anchor" href="#why">§</a>Why</h3>
+<p><code>deploy()</code> runs N parallel <code>nix copy</code> subprocesses, each pulling
+from the build host. The build host’s uplink is the bottleneck —
+at scale the deploy serializes on it.</p>
+<p><code>deploy_with_cascade()</code> lets nodes that have already received the
+closure serve the next round’s targets. With <code>fanout=2</code> and N hosts
+sharing one toplevel, copy time drops from <code>N * single_copy_duration</code>
+to <code>ceil(log2(N+1)) * single_copy_duration</code> in the best case.</p>
+<h3 id="how"><a class="doc-anchor" href="#how">§</a>How</h3>
+<ol>
+<li><strong>DAG phase 1</strong>: per-host eval + build (same as <code>deploy()</code>).</li>
+<li><strong>Cascade phase</strong>: collect built toplevels, group by toplevel,
+run one <code>cascade_copy_grouped()</code> per group. Live UI via
+<code>cascade.event_sink</code> if provided.</li>
+<li><strong>DAG phase 2</strong>: per-host activate (only for hosts whose copy
+succeeded; failed-copy hosts are reported as copy_failures).</li>
+</ol>
+<h3 id="when-not-to-use"><a class="doc-anchor" href="#when-not-to-use">§</a>When NOT to use</h3>
+<ul>
+<li>1-2 targets: cascade overhead &gt; parallel direct copy. Use <code>deploy()</code>.</li>
+<li><code>action == DeployAction::Build</code>: nothing to copy. Use <code>deploy()</code>.</li>
+<li>First-time use against an untrusted fleet: prefer <code>deploy()</code> first
+to validate SSH + signing trust path, then switch.</li>
+</ul>
+</div></details></section></div></main></body></html>
