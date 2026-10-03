@@ -2,6 +2,9 @@
 
 use std::collections::HashMap;
 use std::process::Command;
+use std::sync::{Arc, Mutex};
+
+use consortium::dag::{DagBuilder, FnTask, TaskOutcome};
 
 use crate::config::{DeployAction, DeploymentPlan, DeploymentTarget, FleetConfig};
 use crate::error::{NixError, Result};
@@ -101,15 +104,72 @@ pub fn query_current_system(host: &str, user: &str) -> Result<Option<String>> {
     }
 }
 
-/// Evaluate all hosts and return a map of hostname -> toplevel path.
+/// Evaluate all hosts in parallel and return a map of hostname -> toplevel path.
+///
+/// Uses the DAG executor with `FnTask` to fan out `nix eval` calls concurrently,
+/// one task per host. All tasks are independent (no dependencies), so the executor
+/// dispatches all of them immediately and collects results via shared maps.
+///
+/// If any host evaluation fails the first `NixError` is returned (fail-fast,
+/// matching the semantics of the previous serial implementation).
 pub fn eval_all(flake_uri: &str, hostnames: &[String]) -> Result<HashMap<String, String>> {
-    let mut results = HashMap::new();
-    // TODO: parallelize with consortium's Task/Worker infrastructure
-    for hostname in hostnames {
-        let path = eval_toplevel(flake_uri, hostname)?;
-        results.insert(hostname.clone(), path);
+    if hostnames.is_empty() {
+        return Ok(HashMap::new());
     }
-    Ok(results)
+
+    // Results and errors are written by task closures and read after the DAG
+    // completes. The DagContext is consumed by `run()`, so we route data
+    // through `Arc<Mutex<…>>` captured directly in each closure.
+    let results: Arc<Mutex<HashMap<String, String>>> = Arc::new(Mutex::new(HashMap::new()));
+    let errors: Arc<Mutex<HashMap<String, NixError>>> = Arc::new(Mutex::new(HashMap::new()));
+
+    let mut dag = DagBuilder::new();
+
+    for hostname in hostnames {
+        let flake = flake_uri.to_string();
+        let host = hostname.clone();
+        let results = results.clone();
+        let errors = errors.clone();
+
+        dag.add_task(
+            host.clone(),
+            FnTask::new(format!("eval:{}", host), move |_ctx| {
+                match eval_toplevel(&flake, &host) {
+                    Ok(path) => {
+                        results.lock().unwrap().insert(host.clone(), path);
+                        TaskOutcome::Success
+                    }
+                    Err(e) => {
+                        let msg = e.to_string();
+                        errors.lock().unwrap().insert(host.clone(), e);
+                        TaskOutcome::Failed(msg)
+                    }
+                }
+            }),
+        );
+    }
+
+    let report = dag
+        .build()
+        .map_err(|e| NixError::DagExecution(e.to_string()))?
+        .run()
+        .map_err(|e| NixError::DagExecution(e.to_string()))?;
+
+    if !report.is_success() {
+        let mut errs = errors.lock().unwrap();
+        if let Some((_host, err)) = errs.drain().next() {
+            return Err(err);
+        }
+        // Fallback — should not be reached if every failing task inserts an error.
+        let ids: Vec<String> = report.failed.keys().map(|id| id.0.clone()).collect();
+        return Err(NixError::General(format!(
+            "eval failed for hosts: {}",
+            ids.join(", ")
+        )));
+    }
+
+    let final_results = results.lock().unwrap().clone();
+    Ok(final_results)
 }
 
 #[cfg(test)]
