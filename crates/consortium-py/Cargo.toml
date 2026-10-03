@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Python bindings for consortium (ClusterShell-compatible API)"
+# Never published: a cdylib build artifact, already excluded in spirit by the
+# "(exclude test harness and py bindings)" note in release-plz.toml. Stated in
+# Cargo.toml so cargo, not just release-plz, is the authority. See CON-204.
+publish = false
 
 [lib]
 name = "_consortium"

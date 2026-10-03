@@ -5,6 +5,11 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Deterministic simulator for the consortium cascade primitive"
+# Never published: this crate imports `consortium_nix::cascade`, a module that
+# exists only in this workspace's `consortium-nix` and in no released version of
+# it. `cargo publish` resolves the dependency from the registry during
+# verification, so the tarball cannot compile. See CON-204.
+publish = false
 
 [dependencies]
 consortium-nix = { workspace = true }
