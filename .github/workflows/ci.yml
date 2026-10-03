@@ -127,6 +127,51 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      # CON-303: `cargo nextest` does not run doctests, and doctests are the
+      # only tests in this workspace that resolve a crate *by name*. The 417 lib
+      # unit tests compile as part of `consortium` and use `crate::` paths, so
+      # they cannot observe the lib target's name at all. That is exactly how
+      # CON-207 shipped: `lib.name = "consortium"` sat under `[package]`, where
+      # cargo ignores it, so the lib target was really `consortium_crate` and
+      # every `use consortium::…` doctest failed with E0433 — with nothing in CI
+      # executing them, the whole unit job stayed green on a broken public crate
+      # name. This step is the gate that would have caught it.
+      #
+      # Scope: `--workspace`, measured on 24bf186, because it is a strict
+      # superset of the per-crate alternative. Five crates carry doctests —
+      # `consortium` (8), `consortium-nix` (3), `consortium-cli` (2),
+      # `consortium-fanout-sim` (2), `consortium-test-harness` (1) — for 16
+      # doctests total, where `-p consortium-crate --doc` would gate only the 8
+      # in `consortium`. The defect this guards is a target-name defect, and it
+      # is not confined to one crate: renaming any lib target breaks every
+      # `use <crate>::` in that crate's doctests, so the gate has to be
+      # workspace-wide to be honest about the class of bug. Cost is ~4s warm
+      # (~81s cold, mostly deps it already compiles for the nextest run above).
+      # `--no-fail-fast` matches the nextest step so one broken crate still
+      # reports every other crate's doctests.
+      #
+      # No swallow token. `harness/ci/check_test_gates.py` fails CI on an
+      # unjustified `|| true` / `continue-on-error: true`, so this step cannot be
+      # quietly neutered.
+      #
+      # Named "Run doc tests" rather than "Run doctests" on purpose: the audit's
+      # test-step vocabulary is `^run\b.*\btests?\b`, and `\btests?\b` cannot
+      # match inside the single word "doctests" (there is no word boundary before
+      # the "test"), so a step named "Run doctests" would be invisible to
+      # `check_test_gates.py::audit_unreachable_test_steps`. Spelling it as two
+      # words puts this step under the repo's own guard.
+      #
+      # `if: ${{ !cancelled() }}` because GitHub's default step condition is
+      # `success()`: without it this step is *skipped* rather than run whenever
+      # the nextest step above is red, which would hide a second, independent
+      # signal. `audit_unreachable_test_steps` enforces the same rule, and it
+      # does catch this step -- verified by deleting the `if:` locally and
+      # watching the audit go red. That is the difference between a step that is
+      # guarded by the audit and one that merely happens to carry the condition.
+      - name: Run doc tests
+        if: ${{ !cancelled() }}
+        run: cargo test --workspace --doc --no-fail-fast
+
       # CON-97: `continue-on-error` removed. clippy is a lint gate, not a test
       # step, so the guard came off.
       #
