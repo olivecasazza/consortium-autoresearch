@@ -30,21 +30,80 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
 
       - name: Deploy versioned docs
+        id: docs
         if: success()
+        env:
+          # `github.ref_name` is a raw ref name. A feature branch such as
+          # `fix/con-204-foo` must not become a nested destination_dir path.
+          DOCS_REF: ${{ github.ref_name }}
         run: |
-          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-          if [ -n "$LATEST_TAG" ]; then
-            cargo doc --workspace --no-deps
-            echo '<meta http-equiv="refresh" content="0; url=consortium/index.html">' > target/doc/index.html
+          set -euo pipefail
+
+          # Collapse the ref to a single path segment. Harmless for `master`,
+          # required for every branch that contains a `/`. `.` and `..` survive
+          # the character filter and would address a directory outside the
+          # publish root, so they are rejected rather than passed through.
+          safe_ref="${DOCS_REF//[^A-Za-z0-9._-]/-}"
+          case "$safe_ref" in
+            '' | '.' | '..')
+              echo "::error::ref name '$DOCS_REF' does not yield a usable destination path segment"
+              exit 1
+              ;;
+          esac
+          if [ "$safe_ref" != "$DOCS_REF" ]; then
+            echo "sanitised destination_dir: '$DOCS_REF' -> '$safe_ref'"
           fi
 
-      - name: Publish docs to /${{ github.ref_name }}/
-        if: success()
+          # A tag is version information, not a precondition for building the
+          # docs. This repo is a fork of cea-hpc/ClusterShell and advertises
+          # no tags of its own, so `git describe` is expected to fail here on
+          # some runs. Report what git said instead of discarding it, but do
+          # not let the tag decide whether docs get built.
+          if describe_out=$(git describe --tags --abbrev=0 2>&1); then
+            echo "docs version: $describe_out"
+          else
+            echo "::warning::no tag reachable from HEAD ($(git rev-parse --short HEAD))"
+            echo "git describe: $describe_out"
+            # Diagnostic only: it must never be able to abort the step, so a
+            # failure to reach origin is reported as a count of unknown rather
+            # than propagated.
+            tag_count=$(git ls-remote --tags origin 2>/dev/null | wc -l) || tag_count=unknown
+            echo "tags advertised by origin: $tag_count"
+          fi
+
+          cargo doc --workspace --no-deps
+          printf '%s\n' '<meta http-equiv="refresh" content="0; url=consortium/index.html">' > target/doc/index.html
+
+          # A step that reports success while publishing nothing is the exact
+          # failure this job had: the build was skipped, the publish step then
+          # failed on a missing target/doc. Assert the product before claiming
+          # it, and hand the publish step an explicit gate to check.
+          #
+          # The check below is on the crate docs, not on the index.html we just
+          # wrote: that file is created by the redirect above, so testing it
+          # could only ever fail on the redirect itself. The meta refresh
+          # already claims `consortium/index.html` exists, so that path is the
+          # real contract. If it is absent the published site is a dead
+          # redirect, which is worse than a red job.
+          if [ ! -f target/doc/consortium/index.html ]; then
+            echo "::error::cargo doc produced no target/doc/consortium/index.html"
+            echo "target/doc contents: $(ls -A target/doc 2>&1 | tr '\n' ' ')"
+            exit 1
+          fi
+          if [ -z "$(ls -A target/doc)" ]; then
+            echo "::error::target/doc is empty after cargo doc"
+            exit 1
+          fi
+          echo "destination_dir=$safe_ref" >> "$GITHUB_OUTPUT"
+          echo "build=true" >> "$GITHUB_OUTPUT"
+
+      - name: Publish docs to /<sanitised ref>/
+        if: steps.docs.outputs.build == 'true'
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./target/doc
-          destination_dir: ${{ github.ref_name }}
+          destination_dir: ${{ steps.docs.outputs.destination_dir }}
           keep_files: true
 
   release-plz-pr:
