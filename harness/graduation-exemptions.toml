@@ -1,0 +1,24 @@
+# graduation-exemptions.toml — recorded decisions for upstream test classes that
+# are NOT fully ported to Rust.
+#
+# An entry here is the only thing that satisfies criterion 2 of the CON-4
+# graduation gate for a critical class. "We didn't get to it" is not a
+# decision; an entry is an explicit, reviewed, recorded judgement that the Rust
+# feature set covers the class's behavior by some other means.
+#
+# The gate rejects an entry missing any of: class, decision, reason, reviewer,
+# date, issue. It also rejects an entry for a class that no longer matches
+# harness/graduation-gate.toml `critical_class_globs`, and flags (but does not
+# fail on) an entry for a class that has since been fully ported.
+#
+# Format:
+#
+#   [[exemption]]
+#   class    = "TaskTimerTest"      # exact upstream test class name
+#   decision = "accept"             # accept | defer
+#   reason   = "why the Rust feature set is verified without these ports"
+#   reviewer = "who reviewed this"
+#   date     = "YYYY-MM-DD"
+#   issue    = "CON-nnn"             # where the porting or the review is tracked
+
+# Intentionally empty. See docs/graduation-gate.md.

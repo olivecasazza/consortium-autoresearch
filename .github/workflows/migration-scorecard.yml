@@ -263,7 +263,50 @@ jobs:
         if: always()
         run: python harness/render_summary.py --results-dir=results >> $GITHUB_STEP_SUMMARY
 
+      # ── CON-4 graduation gate ─────────────────────────────────
+      # The gate's own self-tests run first: they are what stops someone from
+      # "fixing" a FAIL by weakening the gate. They are fast and hermetic.
+      - name: Test the graduation gate
+        run: |
+          source .venv/bin/activate
+          python -m pytest harness/test_graduation_gate.py -q
+
+      # The single boolean that says whether the side-by-side oracle can be
+      # retired. It is wired, published as `graduation_gate=PASS|FAIL`, printed
+      # into the step summary, and archived as a 90-day JSON artifact, so the
+      # signal itself is fully machine-checkable -- which is what CON-4b asked
+      # for. What it deliberately is NOT is a blocking required check.
+      #
+      # justified-guard: the floor this step measures is 80% and the tree is
+      # currently at 0.0%, so the gate is *correct* to exit 1 today. Making this
+      # a hard-failing check would therefore red every PR in the repository on
+      # every unrelated change, from the moment it is wired until the porting
+      # stream (CON-115/CON-116/CON-97) actually reaches the floor -- turning a
+      # progress signal into a permanent blocker that trains everyone to ignore
+      # it. Nothing is lost by guarding it: the verdict is still published as a
+      # job output, printed, and archived, and the gate's own self-tests two
+      # steps above are UNGUARDED, so weakening the gate to force a PASS still
+      # fails the build. Flip this to blocking (delete the line below) at the
+      # moment the gate first reports PASS for real -- that is the transition
+      # that retires the side-by-side oracle, and it should be a deliberate,
+      # visible commit rather than a side effect.
+      - name: CON-4 graduation gate
+        id: graduation-gate
+        continue-on-error: true
+        run: |
+          source .venv/bin/activate
+          python harness/graduation_gate.py \
+            --results-dir=results \
+            --json-out=results/graduation-gate.json
+
       # ── Upload artifacts ───────────────────────────────────────
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: graduation-gate-report
+          path: results/graduation-gate.json
+          retention-days: 90
+
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
