@@ -159,24 +159,24 @@ class PropagationTreeRouter(object):
         self._unreachable_hosts.add(dst)
 
     def _best_next_hop(self, candidates):
-        """find out a good next hop gateway"""
-        backup = None
-        backup_connections = 1e400 # infinity
-
-        candidates = candidates.difference(self._unreachable_hosts)
-
-        for host in candidates:
-            # the router tracks established connections in the
-            # nodes_fanin table to avoid overloading a gateway
-            connections = self.nodes_fanin.setdefault(host, 0)
-            # FIXME
-            #if connections < self.fanout:
-            #    # currently, the first one is the best
-            #    return host
-            if backup_connections > connections:
-                backup = host
-                backup_connections = connections
-        return backup
+        """find out a good next hop gateway
+        
+        Returns the host with the fewest current connections to balance load,
+        or None if no available hosts exist.
+        """
+        # Filter out unreachable hosts
+        available = candidates.difference(self._unreachable_hosts)
+        if not available:
+            return None
+        # Choose host with fewest current connections (load balancing)
+        best_host = None
+        best_connections = float('inf')
+        for host in available:
+            connections = self.nodes_fanin.get(host, 0)
+            if connections < best_connections:
+                best_connections = connections
+                best_host = host
+        return best_host
 
 
 class PropagationChannel(Channel):
