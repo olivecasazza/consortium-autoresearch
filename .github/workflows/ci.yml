@@ -26,6 +26,11 @@ permissions:
   contents: read
   checks: write
 
+# Nix builds are flake `checks` (cargo-test, cargo-clippy, cargo-fmt,
+# consortium, consortium-cli-smoke, pre-commit), built by buildbot-nix on
+# PRs; GitHub Actions runs no Nix. The former self-hosted "Nix Integration"
+# job is therefore redundant with `consortium-cli-smoke` and `nix build
+# .#consortium-cli` there, and is not repeated here.
 jobs:
   # ── Layer 1: Unit Tests (fast, GitHub-hosted) ─────────────────────
   unit:
@@ -359,60 +364,3 @@ jobs:
         if: always()
         run: |
           docker ps -a --filter "name=nix-int\|ansible-int" -q | xargs -r docker rm -f
-
-  # ── Layer 3: Nix Integration (self-hosted NixOS Mac Minis) ────────
-  nix-integration:
-    name: Nix Integration (self-hosted)
-    needs: [docker-integration, tool-integration]
-    runs-on: nix-builder
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: DeterminateSystems/magic-nix-cache-action@v2
-
-      - name: Build consortium-cli
-        run: nix build .#consortium-cli
-
-      - name: Verify cast binary works
-        run: |
-          ./result/bin/cast --help
-          ./result/bin/claw --help
-
-      # justified-guard: this is a distributed-build *reachability* probe against
-      # self-hosted Nix builders, not a test step and not a build of this repo's
-      # code -- `nix build .#consortium-cli` above is the real build gate and is
-      # unguarded. This step already no-ops when /etc/nix/machines is absent; the
-      # guard covers the case where the machines file exists but the builders are
-      # offline or mid-reboot, which is an infrastructure outage, not a code
-      # regression. Un-swallowing it would make builder flakiness block every PR.
-      - name: Test distributed builds (if builders reachable)
-        continue-on-error: true
-        run: |
-          if [ -f /etc/nix/machines ]; then
-            nix build .#consortium-cli --builders @/etc/nix/machines --max-jobs 0
-          else
-            echo "No machines file, skipping distributed build test"
-          fi
-
-      - name: Generate summary
-        if: always()
-        run: |
-          echo "## Nix Integration (self-hosted)" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Check | Result |" >> $GITHUB_STEP_SUMMARY
-          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
-          if [ -L result ]; then
-            echo "| \`nix build .#consortium-cli\` | ✅ \`$(readlink result)\` |" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "| \`nix build .#consortium-cli\` | ❌ |" >> $GITHUB_STEP_SUMMARY
-          fi
-          if [ -f /etc/nix/machines ]; then
-            echo "| Distributed builders | ✅ $(wc -l < /etc/nix/machines) builders |" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "| Distributed builders | ⚠️ not configured |" >> $GITHUB_STEP_SUMMARY
-          fi
-          RUNNER_HOST=$(cat /etc/hostname 2>/dev/null || hostname 2>/dev/null || echo "$RUNNER_NAME")
-          NIX_VER=$(nix --version 2>/dev/null || echo "unknown")
-          echo "| Runner | \`${RUNNER_HOST}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Nix | \`${NIX_VER}\` |" >> $GITHUB_STEP_SUMMARY
