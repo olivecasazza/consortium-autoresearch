@@ -156,8 +156,7 @@ fn main() {
             "build",
             builders,
             fanout,
-            false,
-            2,
+            None,
         ),
         Commands::Deploy {
             on,
@@ -174,8 +173,7 @@ fn main() {
             &action,
             builders,
             fanout,
-            cascade,
-            cascade_fanout,
+            cascade.then_some(cascade_fanout),
         ),
         Commands::Health => cmd_health(&config),
         Commands::Status { on, tag } => cmd_status(&config, on.as_deref(), &tag),
@@ -251,6 +249,9 @@ fn cmd_eval(config: &FleetConfig, on: Option<&str>, tags: &[String]) -> anyhow::
     Ok(())
 }
 
+/// `cascade_fanout` is the per-round cascade fanout and only means anything
+/// when cascading, so the flag and the value collapse into one `Option`:
+/// `None` = direct per-host deploy, `Some(n)` = cascade with fanout `n`.
 fn cmd_deploy(
     config: &FleetConfig,
     on: Option<&str>,
@@ -258,9 +259,9 @@ fn cmd_deploy(
     action_str: &str,
     use_builders: bool,
     fanout: usize,
-    cascade: bool,
-    cascade_fanout: u32,
+    cascade_fanout: Option<u32>,
 ) -> anyhow::Result<()> {
+    let cascade = cascade_fanout.is_some();
     let targets = resolve_targets(config, on, tags)?;
     let action: DeployAction = action_str.parse().map_err(|_| {
         anyhow::anyhow!(
@@ -273,11 +274,8 @@ fn cmd_deploy(
         "Deploying {} host(s) with action '{}'{}:",
         targets.len(),
         action,
-        if cascade {
-            format!(
-                " [cascade copy fanout={} — peer-to-peer fan-out]",
-                cascade_fanout
-            )
+        if let Some(fanout_n) = cascade_fanout {
+            format!(" [cascade copy fanout={fanout_n} — peer-to-peer fan-out]",)
         } else {
             String::new()
         }
@@ -306,7 +304,7 @@ fn cmd_deploy(
                 format!(
                     "cast deploy --cascade || {} hosts || fanout: {}",
                     targets.len(),
-                    cascade_fanout
+                    cascade_fanout.expect("cascade implies a fanout")
                 ),
                 format!("Seed: {} || Action: {}", seed_addr, action),
             ])
@@ -315,15 +313,18 @@ fn cmd_deploy(
             .as_ref()
             .map(|r| r as &dyn consortium_nix::cascade_events::EventSink);
 
+        let fanout_n = cascade_fanout.expect("cascade implies a fanout");
+        let mut cascade = consortium_nix::CascadeOptions::new(fanout_n, &seed_addr);
+        if let Some(sink) = event_sink {
+            cascade = cascade.events(sink);
+        }
         consortium_nix::deploy_with_cascade(
             config,
             &targets,
             action,
             fanout,
             use_builders,
-            cascade_fanout,
-            &seed_addr,
-            event_sink,
+            cascade,
         )?
     } else {
         consortium_nix::deploy(config, &targets, action, fanout, use_builders)?

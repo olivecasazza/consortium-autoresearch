@@ -2,7 +2,9 @@
 //! subprocesses, runnable against actual nixlab hosts.
 //!
 //! [`NixCopyExecutor`] is the realistic counterpart to
-//! [`consortium_fanout_sim::DeterministicExecutor`]. The sim does
+//! `consortium_fanout_sim::DeterministicExecutor` — a code span rather
+//! than a link, because `consortium-fanout-sim` depends on this crate
+//! and an intra-doc link would need the reverse edge. The sim does
 //! `closure_size / bandwidth + latency` math; this one shells out to
 //! `nix copy --no-check-sigs --to ssh-ng://user@host store_path` for
 //! every (src, tgt) edge in a round, in parallel via `std::thread`.
@@ -187,7 +189,7 @@ impl RoundExecutor for NixCopyExecutor {
         thread::scope(|scope| {
             for &(src, tgt) in edges {
                 let tx = tx.clone();
-                let me = &*self;
+                let me = self;
                 scope.spawn(move || {
                     let outcome = me.run_edge(src, tgt);
                     let _ = tx.send(((src, tgt), outcome));

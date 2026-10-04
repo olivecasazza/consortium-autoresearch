@@ -649,7 +649,6 @@ reverse = echo web
         let source = StaticGroupSource::new(map);
         let nodes = source.resolve_map("web").unwrap();
 
-        let resolver = GroupResolver::new();
         let parsed = nodes
             .split(|c: char| c == ',' || c.is_whitespace())
             .filter(|s| !s.is_empty())

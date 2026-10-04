@@ -7,6 +7,7 @@ use crate::dag::error::{DagError, Result};
 use crate::dag::types::{ConcurrencyLimit, DagTask, TaskId};
 
 /// Internal DAG representation using adjacency lists.
+#[derive(Default)]
 pub struct DagGraph {
     /// All tasks keyed by ID.
     pub(crate) tasks: HashMap<TaskId, Box<dyn DagTask>>,
@@ -25,14 +26,7 @@ pub struct DagGraph {
 impl DagGraph {
     /// Create an empty graph.
     pub fn new() -> Self {
-        Self {
-            tasks: HashMap::new(),
-            dependents: HashMap::new(),
-            dependencies: HashMap::new(),
-            concurrency_groups: HashMap::new(),
-            task_groups: HashMap::new(),
-            task_cache: HashMap::new(),
-        }
+        Self::default()
     }
 
     /// Add a task to the graph.
@@ -203,7 +197,6 @@ impl DagGraph {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dag::context::DagContext;
     use crate::dag::types::{FnTask, TaskOutcome};
 
     fn noop_task(name: &str) -> Box<dyn DagTask> {
