@@ -308,18 +308,19 @@ fn test_nix_cache_hit_skips_rebuild() {
     // actual cache lookup and varies with network and runner load, so a
     // threshold here can only fire at random.
     //
-    // `nix build --dry-run` is the observable that actually separates the two:
-    // it reports "these N derivations will be built" only when a builder has
-    // to run, and reports nothing to build once the result is already in the
-    // store.
+    // Any work at all means the cache missed. Nix phrases the two outcomes
+    // differently depending on how it can satisfy the target: "these N
+    // derivations will be built" when a builder has to run, and "this path
+    // will be fetched" when it can be substituted from a binary cache. Both
+    // mean work, so both count as a miss; a hit reports neither.
     let (ok2, plan, err2) = ssh_run(
         port,
         "cd /test-flake && nix build .#test-derivation --dry-run 2>&1",
     );
     assert!(ok2, "dry-run probe failed: {}", err2);
     assert!(
-        !plan.contains("will be built"),
-        "second build still had to build {:?}: the cache did not hit",
+        !plan.contains("will be built") && !plan.contains("will be fetched"),
+        "second build still had work to do ({:?}): the cache did not hit",
         path1
     );
 
@@ -331,7 +332,7 @@ fn test_nix_cache_hit_skips_rebuild() {
     let (ok3, control, err3) = ssh_run(port, "cd /test-flake && nix build .#hello --dry-run 2>&1");
     assert!(ok3, "control probe failed: {}", err3);
     assert!(
-        control.contains("will be built"),
+        control.contains("will be built") || control.contains("will be fetched"),
         "expected an unbuilt target to report work, got {:?}; the cache probe \
          above cannot distinguish a hit from a miss",
         control
