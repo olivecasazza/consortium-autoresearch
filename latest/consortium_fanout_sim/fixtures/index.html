@@ -11,13 +11,13 @@ produces deterministic output.</p>
 <p>Each is a sum-type so callers can mix and match without baking a
 specific distribution into the simulator.</p>
 </div></details><h2 id="enums" class="section-header">Enums<a href="#enums" class="anchor">§</a></h2><dl class="item-table"><dt><a class="enum" href="enum.BandwidthDistribution.html" title="enum consortium_fanout_sim::fixtures::BandwidthDistribution">Bandwidth<wbr>Distribution</a></dt><dd>How per-edge bandwidth varies. Generators populate the
-<a href="../../consortium_nix/cascade/struct.NetworkProfile.html#structfield.bandwidth" title="field consortium_nix::cascade::NetworkProfile::bandwidth"><code>NetworkProfile::bandwidth</code></a> map; edges absent from the map fall
+[<code>NetworkProfile::bandwidth</code>] map; edges absent from the map fall
 through to the executor’s default.</dd><dt><a class="enum" href="enum.FailureSchedule.html" title="enum consortium_fanout_sim::fixtures::FailureSchedule">Failure<wbr>Schedule</a></dt><dd>Injects deterministic failures into the cascade. The
 <code>DeterministicExecutor</code> calls <code>failure_for(round, src, tgt)</code> for
 every edge it dispatches; non-<code>None</code> returns become the edge’s
 outcome.</dd><dt><a class="enum" href="enum.SeedDistribution.html" title="enum consortium_fanout_sim::fixtures::SeedDistribution">Seed<wbr>Distribution</a></dt><dd>How to choose the initial set of nodes that have the closure at
 cascade start.</dd><dt><a class="enum" href="enum.UplinkDistribution.html" title="enum consortium_fanout_sim::fixtures::UplinkDistribution">Uplink<wbr>Distribution</a></dt><dd>How to assign per-node link capacities. Generators populate the
-<a href="../../consortium_nix/cascade/struct.NetworkProfile.html#structfield.nodes" title="field consortium_nix::cascade::NetworkProfile::nodes"><code>NetworkProfile::nodes</code></a> map, which engages contention modeling in
-<a href="../../consortium_nix/cascade/struct.NetworkProfile.html#method.effective_bandwidth" title="method consortium_nix::cascade::NetworkProfile::effective_bandwidth"><code>NetworkProfile::effective_bandwidth</code></a>.</dd></dl><h2 id="functions" class="section-header">Functions<a href="#functions" class="anchor">§</a></h2><dl class="item-table"><dt><a class="fn" href="fn.populate_uniform_latency.html" title="fn consortium_fanout_sim::fixtures::populate_uniform_latency">populate_<wbr>uniform_<wbr>latency</a></dt><dd>Sprinkle uniform latency across all edges. Useful when bandwidth
+[<code>NetworkProfile::nodes</code>] map, which engages contention modeling in
+[<code>NetworkProfile::effective_bandwidth</code>].</dd></dl><h2 id="functions" class="section-header">Functions<a href="#functions" class="anchor">§</a></h2><dl class="item-table"><dt><a class="fn" href="fn.populate_uniform_latency.html" title="fn consortium_fanout_sim::fixtures::populate_uniform_latency">populate_<wbr>uniform_<wbr>latency</a></dt><dd>Sprinkle uniform latency across all edges. Useful when bandwidth
 alone isn’t enough to differentiate strategies (latency dominates
 for tiny closures).</dd><dt><a class="fn" href="fn.rng_from_seed.html" title="fn consortium_fanout_sim::fixtures::rng_from_seed">rng_<wbr>from_<wbr>seed</a></dt><dd>Build a deterministic ChaCha8Rng from a u64 seed.</dd></dl></section></div></main></body></html>
