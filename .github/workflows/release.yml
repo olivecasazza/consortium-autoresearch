@@ -30,16 +30,21 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
 
       - name: Deploy versioned docs
+        id: docs
         if: success()
         run: |
           LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
           if [ -n "$LATEST_TAG" ]; then
             cargo doc --workspace --no-deps
             echo '<meta http-equiv="refresh" content="0; url=consortium/index.html">' > target/doc/index.html
+            echo "published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No release tag yet; skipping versioned docs."
+            echo "published=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Publish docs to /${{ github.ref_name }}/
-        if: success()
+        if: success() && steps.docs.outputs.published == 'true'
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
