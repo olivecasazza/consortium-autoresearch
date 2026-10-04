@@ -1,0 +1,52 @@
+name: CON454 diag2
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    name: CON454 nix-daemon recovery probe
+    runs-on: nix-builder
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Probe daemon + attempt recovery
+        run: |
+          set +e
+          SW=/run/current-system/sw/bin
+          echo "### uptime / init"
+          cat /proc/uptime
+          cat /proc/1/comm
+          ls -la /run/systemd/ 2>&1 | head
+          echo "### is nix-daemon process alive?"
+          ls "$SW" 2>/dev/null | head -5
+          for p in /proc/[0-9]*; do
+            if grep -qa nix-daemon "$p/comm" 2>/dev/null; then
+              echo "ALIVE: $p -> $(cat $p/comm)"
+            fi
+          done
+          echo "(end process scan)"
+          echo "### sudo availability"
+          sudo -n true 2>&1 && echo "SUDO: passwordless OK" || echo "SUDO: DENIED"
+          echo "### try raw connect to stale socket via nix itself"
+          timeout 60 nix build --no-link --dry-run .#consortium-cli 2>&1 | tail -5
+          echo "### can we talk to dbus at all?"
+          timeout 20 systemctl --version 2>&1 | head -2
+          echo "DBUS_SESSION_BUS=[$DBUS_BUS_ADDRESS]"
+          echo "XDG_RUNTIME_DIR=[$XDG_RUNTIME_DIR]"
+          echo "### recovery attempt"
+          if sudo -n true 2>/dev/null; then
+            echo "-- restarting nix-daemon via sudo --"
+            sudo -n systemctl restart nix-daemon 2>&1 | head -5
+            sudo -n systemctl status nix-daemon --no-pager 2>&1 | head -10
+            ls -la /nix/var/nix/daemon-socket/ 2>&1
+            echo "-- retrying nix build --"
+            timeout 900 nix build .#consortium-cli 2>&1 | tail -20
+            echo "BUILD_EXIT=$?"
+          else
+            echo "no sudo; cannot restart daemon from CI"
+          fi
