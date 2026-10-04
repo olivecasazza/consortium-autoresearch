@@ -441,14 +441,28 @@ jobs:
           fi
 
           echo "::warning::daemon store unusable on $(hostname) (CON-454); using a per-job store at $STORE_DIR"
-          {
-            echo "store = local?root=$STORE_DIR"
-            echo "build-users-group ="
-            echo "sandbox = false"
-          } >> "$GITHUB_ENV"
 
-          echo "nix store configured: store=local?root=$STORE_DIR build-users-group='' sandbox=false"
-          nix store info --json
+          # Export for the rest of *this* step so we can verify the store here,
+          # and record the same keys for later steps via GITHUB_ENV. Writing to
+          # GITHUB_ENV alone is not enough: it does not affect the current
+          # process, so a verification nix call in this step would still dial
+          # the broken daemon store. `env` is used rather than `export` because
+          # nix setting names contain hyphens, which bash cannot export.
+          env "store=local?root=$STORE_DIR" "build-users-group=" "sandbox=false" \
+            nix store info --json
+
+          # Record the values for subsequent steps that need to dial the store.
+          # `touch` first: GitHub hands us a path that does not exist yet, so a
+          # bare -w test would report the file as unwritable and silently skip.
+          if [ -n "${GITHUB_ENV:-}" ] && : >> "$GITHUB_ENV" 2>/dev/null; then
+            {
+              echo "store=local?root=$STORE_DIR"
+              echo "build-users-group="
+              echo "sandbox=false"
+            } >> "$GITHUB_ENV"
+          else
+            echo "::warning::GITHUB_ENV is unset; per-job store applies to this step only"
+          fi
 
       - uses: DeterminateSystems/magic-nix-cache-action@v2
 
