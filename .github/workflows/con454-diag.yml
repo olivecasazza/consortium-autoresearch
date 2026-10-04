@@ -1,0 +1,66 @@
+name: CON454 diag
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    name: CON454 nix-daemon diag
+    runs-on: nix-builder
+    timeout-minutes: 10
+    steps:
+      - name: Capture nix-daemon state
+        run: |
+          set +e
+          echo "### runner"
+          hostname
+          id
+          echo "NIX_REMOTE=[${NIX_REMOTE}]"
+          echo "NIX_CONFIG=[${NIX_CONFIG}]"
+          echo "HOME=[${HOME}]"
+          echo "### nix binary"
+          command -v nix
+          readlink -f "$(command -v nix)" 2>&1
+          nix --version 2>&1
+          echo "### /etc/nix/nix.conf"
+          cat /etc/nix/nix.conf 2>&1
+          echo "### ~/.config/nix/nix.conf"
+          cat "$HOME/.config/nix/nix.conf" 2>&1
+          echo "### NIX_CONF_DIR candidates"
+          ls -la /etc/nix/ 2>&1
+          echo "### daemon socket"
+          ls -la /nix/var/nix/daemon-socket/ 2>&1
+          echo "### nix-daemon service"
+          systemctl status nix-daemon --no-pager 2>&1 | head -40
+          echo "### nix-daemon journal"
+          journalctl -u nix-daemon --no-pager -n 80 2>&1
+          echo "### nix-daemon unit state"
+          systemctl is-active nix-daemon 2>&1
+          systemctl is-enabled nix-daemon 2>&1
+          systemctl show nix-daemon -p ActiveState -p SubState -p NRestarts -p ExecMainStatus 2>&1
+          echo "### raw socket probe"
+          python3 - <<'PY' 2>&1
+          import socket
+          s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+          s.settimeout(10)
+          try:
+              s.connect('/nix/var/nix/daemon-socket/socket')
+              print("connect: OK")
+              s.sendall(b'\x00')
+              data = s.recv(32768)
+              print("recv bytes:", len(data))
+              print("first bytes:", data[:64])
+          except Exception as e:
+              print("socket error:", type(e).__name__, e)
+          PY
+          echo "### nix store dir"
+          ls -ld /nix /nix/store /nix/var 2>&1
+          df -h /nix 2>&1
+          echo "### build users"
+          getent group nixbld 2>&1
+          getent group nixbld1 2>&1
+          echo "### id"
+          id
