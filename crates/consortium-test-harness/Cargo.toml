@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Docker-based mini-HPC test harness for consortium"
+publish = false
 
 [dependencies]
 consortium.workspace = true

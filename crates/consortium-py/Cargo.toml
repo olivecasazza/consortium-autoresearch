@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Python bindings for consortium (ClusterShell-compatible API)"
+publish = false
 
 [lib]
 name = "_consortium"
