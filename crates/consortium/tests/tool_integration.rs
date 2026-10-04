@@ -277,7 +277,7 @@ fn test_nix_cache_hit_skips_rebuild() {
     ));
     assert!(wait_ssh(port, 30));
 
-    // First build: realises the derivation and prints its store path.
+    // First build: realises the derivation so the store path is registered.
     let (ok, path1, err1) = ssh_run(
         port,
         "cd /test-flake && nix build .#test-derivation --no-link --print-out-paths",
@@ -289,46 +289,55 @@ fn test_nix_cache_hit_skips_rebuild() {
         path1
     );
 
-    // Second build of the same target must be served from the cache.
+    // The cache property is asserted as *work avoided*, not as a store path and
+    // not as a duration.
     //
-    // The property is asserted structurally, not by wall clock. `nix build`
-    // re-evaluates the flake on every invocation, and /test-flake pins
+    // Why not the store path: `--print-out-paths` reports the output path
+    // recorded in the .drv, and Nix fixes that at evaluation time, before it
+    // decides whether to build. Nix is content-addressed, so re-running the
+    // build re-derives the *same* path whether it served the result from the
+    // cache or rebuilt it from scratch. Asserting `path1 == path2` therefore
+    // passes even against a completely broken cache, which is precisely the
+    // vacuous test this assertion is meant to replace.
+    //
+    // Why not a duration: `nix build` re-evaluates the flake on every
+    // invocation, and /test-flake pins
     // `github:NixOS/nixpkgs/nixos-unstable` with no flake.lock baked into the
     // image (Dockerfile.nix-node), so each call also re-resolves the nixpkgs
-    // branch head over the network. That fixed eval+fetch cost is orders of
-    // magnitude larger than the actual cache lookup, and it varies with
-    // network and runner load, so a duration threshold here can only fire at
-    // random -- it never distinguished a working cache from a broken one.
-    let (ok2, path2, err2) = ssh_run(
+    // branch head over the network. That fixed eval+fetch cost dwarfs the
+    // actual cache lookup and varies with network and runner load, so a
+    // threshold here can only fire at random.
+    //
+    // `nix build --dry-run` is the observable that actually separates the two:
+    // it reports "these N derivations will be built" only when a builder has
+    // to run, and reports nothing to build once the result is already in the
+    // store.
+    let (ok2, plan, err2) = ssh_run(
         port,
-        "cd /test-flake && nix build .#test-derivation --no-link --print-out-paths",
+        "cd /test-flake && nix build .#test-derivation --dry-run 2>&1",
     );
-    assert!(ok2, "second build failed: {}", err2);
-
-    // Nix is content-addressed, so a rebuild of the same derivation lands on
-    // the same store path only because it was reused from the cache. A cache
-    // that genuinely missed would evaluate to the identical path only by
-    // coincidence -- but combined with the offline path-info probe below this
-    // pins the behaviour the test is named for.
-    assert_eq!(
-        path1, path2,
-        "second build resolved to a different store path: the cache did not hit"
+    assert!(ok2, "dry-run probe failed: {}", err2);
+    assert!(
+        !plan.contains("will be built"),
+        "second build still had to build {:?}: the cache did not hit",
+        path1
     );
 
-    // `nix path-info --offline` answers only from the local store. If it
-    // succeeds, the path is present without touching the network; if the cache
-    // had missed and the rebuild were somehow failing to register, this fails.
-    let (ok3, info, err3) = ssh_run(port, &format!("nix path-info --offline {}", path2));
-    assert!(
-        ok3,
-        "cached path {} is not valid in the local store: {}",
-        path2, err3
+    // Negative control: `--rebuild` tells Nix to ignore the existing store
+    // paths and execute the builder anyway. The probe above must therefore
+    // report work for it. Without this, "no work reported" would pass just as
+    // happily against a --dry-run that never reports anything, and the
+    // assertion above would be unfalsifiable again.
+    let (ok3, forced, err3) = ssh_run(
+        port,
+        "cd /test-flake && nix build .#test-derivation --rebuild --dry-run 2>&1",
     );
+    assert!(ok3, "--rebuild probe failed: {}", err3);
     assert!(
-        info.contains(&path2),
-        "path-info returned {:?}, expected it to report {}",
-        info,
-        path2
+        forced.contains("will be built"),
+        "expected --rebuild to report work, got {:?}; the cache probe above \
+         cannot distinguish a hit from a miss",
+        forced
     );
 
     stop_container("nix-int-cache");
