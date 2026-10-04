@@ -30,6 +30,6 @@ consortium-ansible = { path = "crates/consortium-ansible", version = "0.1.0" }
 consortium-slurm = { path = "crates/consortium-slurm", version = "0.1.0" }
 consortium-ray = { path = "crates/consortium-ray", version = "0.1.0" }
 consortium-skypilot = { path = "crates/consortium-skypilot", version = "0.1.0" }
-consortium-fanout-sim = { path = "crates/consortium-fanout-sim", version = "0.1.0" }
+consortium-fanout-sim = { path = "crates/consortium-fanout-sim" }
 pyo3 = { version = "0.22", features = ["extension-module"] }
 thiserror = "2"
