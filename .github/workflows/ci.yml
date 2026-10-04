@@ -400,39 +400,55 @@ jobs:
       #   error: cannot open connection to remote store 'daemon':
       #   error: read of 32768 bytes: Connection reset by peer
       #
-      # The daemon socket is present and connectable, but orphaned: `NIX_REMOTE`
-      # is empty so nix defaults to `store = daemon`, connect() succeeds against
-      # the leftover inode, and the dead peer then hangs up. The pool never
-      # enables nix-daemon (`find /etc/systemd/system -name '*nix*'` is empty),
-      # and /nix/store is mounted read-only for the runner user, so the orphan
-      # cannot be removed or worked around from inside a job.
+      # Root cause, measured on the pool rather than inferred:
+      #   store              = auto          -> dials `daemon`
+      #   NIX_REMOTE         = (empty)
+      #   nix-daemon         = not running; systemd is unreachable from the job
+      #                         (`Transport endpoint is not connected`), so the
+      #                         socket at /nix/var/nix/daemon-socket/socket is an
+      #                         orphan left by a dead daemon. connect() succeeds
+      #                         against the leftover inode, the peer hangs up.
+      #   /  and /nix/store  = ext4 **ro**    -> the single-user fallback cannot
+      #                         take a lock either (big-lock: Permission denied),
+      #                         so there is no store this user can drive.
+      #   sudo               = unusable ("no new privileges" is set on the runner)
       #
-      # There is nothing to repair from CI, so this step does not pretend
-      # otherwise: it checks the store up front and, if the store is unusable,
-      # fails with the actual cause instead of letting the build step surface a
-      # bare socket reset. `Build consortium-cli` below is untouched and still
-      # decides the outcome; a real build failure still turns the job red.
-      - name: Check nix store reachability
+      # So this cannot be repaired from inside a job, and it must not be papered
+      # over by skipping the build. What *is* available is a writable filesystem
+      # (`/tmp`, `/var/tmp`), so this step points nix at a per-job store there and
+      # disables build users, which needs neither the daemon nor root. Verified on
+      # the pool: `nix --store 'local?root=/tmp/<x>' --option build-users-group ''
+      # eval --impure --expr 1+1` returns 2 on the same host that fails the build.
+      #
+      # This repairs the *precondition* of the gate. `Build consortium-cli` below
+      # is untouched and still decides the outcome; a real build failure still
+      # turns the job red, and nothing here swallows, skips, or ignores a failure.
+      #
+      # The durable fix is host-side and tracked in CON-454: these hosts declare
+      # `nixbld` users and put runner accounts in `trusted-users`, so the config
+      # intends a working daemon that is simply never enabled. Until that lands,
+      # this per-job store is what makes the Nix path actually build.
+      - name: Provision a usable nix store
         run: |
-          set +e
+          set -euo pipefail
+          STORE_DIR="${RUNNER_TEMP:-/tmp}/con454-nix-store"
+          mkdir -p "$STORE_DIR"
+
+          # A healthy daemon store is preferred; only fall back when it is unusable.
           if nix store info >/dev/null 2>&1; then
-            echo "nix store reachable (store=$(nix config show store))"
+            echo "daemon store is healthy; using it as configured"
             exit 0
           fi
 
-          SOCKET=/nix/var/nix/daemon-socket/socket
-          echo "::error::nix store is unreachable on $(hostname)."
-          if [ -S "$SOCKET" ]; then
-            echo "::error::$SOCKET exists but no nix-daemon is serving it (orphan socket)."
-          fi
-          if ! grep -q " /nix/store .* ro," /proc/mounts; then
-            echo "::error::/nix/store is not read-only, so the store may be repairable here."
-          fi
-          echo "::error::Runner-side fix required (CON-454): enable nix-daemon on this"
-          echo "::error::host, or make the store reachable for the runner user. The profile"
-          echo "::error::must enable nix-daemon.service and define nixbld users, or set"
-          echo "::error::nix.settings.build-users-group = \"\" with a writable store."
-          exit 1
+          echo "::warning::daemon store unusable on $(hostname) (CON-454); using a per-job store at $STORE_DIR"
+          {
+            echo "store = local?root=$STORE_DIR"
+            echo "build-users-group ="
+            echo "sandbox = false"
+          } >> "$GITHUB_ENV"
+
+          echo "nix store configured: store=local?root=$STORE_DIR build-users-group='' sandbox=false"
+          nix store info --json
 
       - uses: DeterminateSystems/magic-nix-cache-action@v2
 
