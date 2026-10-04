@@ -387,7 +387,7 @@ jobs:
         run: |
           docker ps -a --filter "name=nix-int\|ansible-int" -q | xargs -r docker rm -f
 
-  # ── Layer 3: Nix Integration (self-hosted NixOS Mac Minis) ────────
+  # ── Layer 3: Nix Integration (self-hosted NixOS builders) ─────────
   nix-integration:
     name: Nix Integration (self-hosted)
     needs: [docker-integration, tool-integration]
@@ -395,6 +395,53 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+
+      # CON-454: `nix build .#consortium-cli` died at its first `nix` call with
+      #   error: cannot open connection to remote store 'daemon':
+      #   error: read of 32768 bytes: Connection reset by peer
+      # The daemon socket is *present and connectable* -- it is a stale inode left
+      # behind by a dead nix-daemon, so connect() succeeds and the peer then closes.
+      # A probe run on the pool showed, on every host:
+      #   - /nix/var/nix/daemon-socket/socket exists, srw-rw-rw-, root-owned
+      #   - `find /etc/systemd/system -name '*nix*'` returns NOTHING: nix-daemon
+      #     is never enabled, so nothing recreates the socket
+      #   - systemctl/busctl report "Transport endpoint is not connected"
+      #   - NIX_REMOTE is empty, so nix defaults to `store = daemon`
+      # So the fix is to clear the orphan so the client falls back to the local
+      # store. This *repairs the precondition* of the gate; it does not guard,
+      # swallow, or skip it. `Build consortium-cli` below still decides the
+      # outcome, and a real build failure still fails the job.
+      - name: Recover nix store socket
+        run: |
+          set +e
+          SOCKET=/nix/var/nix/daemon-socket/socket
+          echo "NIX_REMOTE=[${NIX_REMOTE}] store=$(nix config show store 2>&1)"
+
+          # Healthy path: the store already answers. Touch nothing.
+          if nix store ping >/dev/null 2>&1; then
+            echo "nix store is healthy; leaving socket alone"
+            exit 0
+          fi
+
+          echo "::warning::nix store is unreachable (stale daemon socket?)"
+          if [ -S "$SOCKET" ]; then
+            echo "removing orphaned socket $SOCKET (no nix-daemon is enabled on this host)"
+            rm -f "$SOCKET" && echo "removed" || echo "could not remove (permissions?)"
+          else
+            echo "no socket at $SOCKET; falling through to local-store retry"
+          fi
+
+          # Confirm the repair actually produced a usable store. If it did not,
+          # say so loudly: the build step below will fail, and that failure is
+          # then a true infrastructure signal rather than a mystery reset.
+          if nix store ping >/dev/null 2>&1; then
+            echo "nix store recovered; proceeding with the build gate"
+          else
+            echo "::error::nix store still unreachable after removing the orphan socket."
+            echo "::error::nix-daemon.service is not enabled on this runner. The real fix is"
+            echo "::error::runner-side: add `nix.settings` enablement so nix-daemon runs, or set"
+            echo "::error::store = local for the builder user. See CON-454 for the profile."
+          fi
 
       - uses: DeterminateSystems/magic-nix-cache-action@v2
 
