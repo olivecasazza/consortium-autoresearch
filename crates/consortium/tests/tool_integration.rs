@@ -323,21 +323,18 @@ fn test_nix_cache_hit_skips_rebuild() {
         path1
     );
 
-    // Negative control: `--rebuild` tells Nix to ignore the existing store
-    // paths and execute the builder anyway. The probe above must therefore
-    // report work for it. Without this, "no work reported" would pass just as
-    // happily against a --dry-run that never reports anything, and the
-    // assertion above would be unfalsifiable again.
-    let (ok3, forced, err3) = ssh_run(
-        port,
-        "cd /test-flake && nix build .#test-derivation --rebuild --dry-run 2>&1",
-    );
-    assert!(ok3, "--rebuild probe failed: {}", err3);
+    // Negative control: the probe must actually be capable of reporting work,
+    // otherwise "reported nothing" would pass just as happily against a probe
+    // that is simply silent. `hello` is a separate output of the same flake
+    // that this test has deliberately never built, so it is guaranteed to miss
+    // and must therefore report work.
+    let (ok3, control, err3) = ssh_run(port, "cd /test-flake && nix build .#hello --dry-run 2>&1");
+    assert!(ok3, "control probe failed: {}", err3);
     assert!(
-        forced.contains("will be built"),
-        "expected --rebuild to report work, got {:?}; the cache probe above \
-         cannot distinguish a hit from a miss",
-        forced
+        control.contains("will be built"),
+        "expected an unbuilt target to report work, got {:?}; the cache probe \
+         above cannot distinguish a hit from a miss",
+        control
     );
 
     stop_container("nix-int-cache");
