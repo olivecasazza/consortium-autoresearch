@@ -19,6 +19,13 @@ and it is invisible in the job conclusion. Every test step after the first in a
 job must therefore carry an `if:` that survives a sibling failure
 (`!cancelled()` or `always()`).
 
+The third form is CON-415's: a self-hosted job that calls `hashFiles()`. The
+runner expands that call through the node runtime in its own install root,
+before any step runs, and current nixpkgs `github-runner` ships node24 only. One
+call therefore aborts the entire job — silently, since the steps that did run
+report nothing while the job sits red. It reads as runner corruption rather than
+as a workflow defect, and it held a lane out of service for two days.
+
 Usage:
     python3 harness/ci/check_test_gates.py [--all] [workflow-dir]
 
@@ -93,6 +100,32 @@ STEP_HEADER = re.compile(r"^ {6}- (name|uses|run|id):\s*(.*)$")
 STEP_NAME = re.compile(r"^ {8}name:\s*(.*)$")
 STEP_IF = re.compile(r"^ {8}if:\s*(.*)$")
 CONTINUE_ON_ERROR = re.compile(r"^ {8}continue-on-error:\s*true\s*$")
+JOB_RUNS_ON = re.compile(r"^ {4}runs-on:\s*(.*)$")
+
+# CON-415. `hashFiles()` is not a workflow-engine function: the runner evaluates
+# it during template expansion by spawning `externals/node20/bin/node` from its
+# own install root, before any step executes. A self-hosted runner built from
+# current nixpkgs ships node24 only (node20 left the store at EOL), so a single
+# `hashFiles()` anywhere in a job aborts the whole job with
+#
+#   ##[error]The template is not valid. ... An error occurred trying to start
+#   process '.../lib/externals/node20/bin/node' ... No such file or directory
+#
+# Steps before the `hashFiles()` step still run, which is what makes this read
+# as "the runner is broken" rather than "one line in one job is wrong". It is
+# also a *silent* gate: the job is red, but no step ever reported a test, so
+# the lane carries no signal while looking like an infrastructure outage.
+#
+# GitHub-hosted runners ship node20, so the same call is fine there. Only jobs
+# pinned to a self-hosted label are audited, which is why this needs a
+# `runs-on:` check rather than a blanket ban.
+HASH_FILES = re.compile(r"\$\{\{\s*hashFiles\s*\(", re.IGNORECASE)
+
+# Runners whose JS-action runtime comes from the runner's own install root,
+# and so are subject to the node20 removal above.
+SELF_HOSTED_POOL = re.compile(
+    r"self-hosted|nix-builder|nixos|nix-remote-builder", re.IGNORECASE
+)
 
 # Audited by default: the two workflows that are real gates.
 DEFAULT_WORKFLOWS = ("ci.yml", "migration-scorecard.yml")
@@ -229,6 +262,47 @@ def audit_unreachable_test_steps(path: Path) -> list[str]:
     return problems
 
 
+def audit_hash_files_on_self_hosted(path: Path) -> list[str]:
+    """Flag `hashFiles()` in a job pinned to a self-hosted runner.
+
+    A `hashFiles()` call is expanded by the runner itself, through the node
+    runtime in the runner's install root, before any step runs. Self-hosted
+    runners built from current nixpkgs do not ship that runtime, so the call
+    takes the whole job down with a "template is not valid" error that reads
+    like runner corruption rather than a workflow defect.
+
+    Same dumb indentation parsing as the rest of this file: track the current
+    job's `runs-on:` and report every `hashFiles()` line inside a self-hosted
+    job. A comment is skipped, so the audit can be discussed in the file.
+    """
+    problems: list[str] = []
+    lines = path.read_text(encoding="utf-8").splitlines()
+    job: str | None = None
+    self_hosted = False
+    for number, line in enumerate(lines, start=1):
+        if COMMENT_LINE.match(line):
+            continue
+        header = JOB_HEADER.match(line)
+        if header:
+            job, self_hosted = header.group(1), False
+            continue
+        runs_on = JOB_RUNS_ON.match(line)
+        if runs_on and job is not None:
+            self_hosted = bool(SELF_HOSTED_POOL.search(runs_on.group(1)))
+            continue
+        if not self_hosted or not HASH_FILES.search(line):
+            continue
+        problems.append(
+            f"{rel(path)}:{number}: hashFiles() in self-hosted job '{job}' -> "
+            f"{line.strip()} — the runner expands this through its own "
+            f"node20 runtime, which current nixpkgs `github-runner` no longer "
+            f"ships, so it aborts the whole job before any step runs. Compute "
+            f"the hash in a `run:` step (e.g. `sha256sum`) and pass it through "
+            f"$GITHUB_OUTPUT instead."
+        )
+    return problems
+
+
 PR_TRIGGER = re.compile(r"^ {2}pull_request:\s*$")
 PR_BRANCHES = re.compile(r"^ {4}branches:")
 
@@ -295,11 +369,14 @@ def main(argv: list[str]) -> int:
         problems.extend(audit(path))
         problems.extend(audit_unreachable_test_steps(path))
         problems.extend(audit_pr_trigger(path))
+        problems.extend(audit_hash_files_on_self_hosted(path))
 
     if problems:
         print("::error::CI test/failure gates are swallowed or unreachable.")
         print("::error::Re-adding a guard requires a `justified-guard:` comment;")
         print("::error::a test step after another test step needs `if: ${{ !cancelled() }}`.")
+        print("::error::a self-hosted job must not call `hashFiles()`; the runner")
+        print("::error::expands it via its own node20 runtime and aborts the job.")
         for problem in problems:
             print(f"::error::{problem}")
         return 1
