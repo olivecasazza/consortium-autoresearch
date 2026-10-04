@@ -277,27 +277,65 @@ fn test_nix_cache_hit_skips_rebuild() {
     ));
     assert!(wait_ssh(port, 30));
 
-    // First build
-    let (ok, path1, _) = ssh_run(
+    // First build: realises the derivation so the store path is registered.
+    let (ok, path1, err1) = ssh_run(
         port,
         "cd /test-flake && nix build .#test-derivation --no-link --print-out-paths",
     );
-    assert!(ok);
-
-    // Second build should be instant (cached)
-    let start = std::time::Instant::now();
-    let (ok2, path2, _) = ssh_run(
-        port,
-        "cd /test-flake && nix build .#test-derivation --no-link --print-out-paths",
-    );
-    let elapsed = start.elapsed();
-    assert!(ok2);
-    assert_eq!(path1, path2, "cached build should produce same path");
-    // Cached build should be very fast
+    assert!(ok, "first build failed: {}", err1);
     assert!(
-        elapsed < Duration::from_secs(5),
-        "cached build took {:?}, expected near-instant",
-        elapsed
+        path1.starts_with("/nix/store/"),
+        "expected a store path from --print-out-paths, got {:?}",
+        path1
+    );
+
+    // The cache property is asserted as *work avoided*, not as a store path and
+    // not as a duration.
+    //
+    // Why not the store path: `--print-out-paths` reports the output path
+    // recorded in the .drv, and Nix fixes that at evaluation time, before it
+    // decides whether to build. Nix is content-addressed, so re-running the
+    // build re-derives the *same* path whether it served the result from the
+    // cache or rebuilt it from scratch. Asserting `path1 == path2` therefore
+    // passes even against a completely broken cache, which is precisely the
+    // vacuous test this assertion is meant to replace.
+    //
+    // Why not a duration: `nix build` re-evaluates the flake on every
+    // invocation, and /test-flake pins
+    // `github:NixOS/nixpkgs/nixos-unstable` with no flake.lock baked into the
+    // image (Dockerfile.nix-node), so each call also re-resolves the nixpkgs
+    // branch head over the network. That fixed eval+fetch cost dwarfs the
+    // actual cache lookup and varies with network and runner load, so a
+    // threshold here can only fire at random.
+    //
+    // Any work at all means the cache missed. Nix phrases the two outcomes
+    // differently depending on how it can satisfy the target: "these N
+    // derivations will be built" when a builder has to run, and "this path
+    // will be fetched" when it can be substituted from a binary cache. Both
+    // mean work, so both count as a miss; a hit reports neither.
+    let (ok2, plan, err2) = ssh_run(
+        port,
+        "cd /test-flake && nix build .#test-derivation --dry-run 2>&1",
+    );
+    assert!(ok2, "dry-run probe failed: {}", err2);
+    assert!(
+        !plan.contains("will be built") && !plan.contains("will be fetched"),
+        "second build still had work to do ({:?}): the cache did not hit",
+        path1
+    );
+
+    // Negative control: the probe must actually be capable of reporting work,
+    // otherwise "reported nothing" would pass just as happily against a probe
+    // that is simply silent. `hello` is a separate output of the same flake
+    // that this test has deliberately never built, so it is guaranteed to miss
+    // and must therefore report work.
+    let (ok3, control, err3) = ssh_run(port, "cd /test-flake && nix build .#hello --dry-run 2>&1");
+    assert!(ok3, "control probe failed: {}", err3);
+    assert!(
+        control.contains("will be built") || control.contains("will be fetched"),
+        "expected an unbuilt target to report work, got {:?}; the cache probe \
+         above cannot distinguish a hit from a miss",
+        control
     );
 
     stop_container("nix-int-cache");
