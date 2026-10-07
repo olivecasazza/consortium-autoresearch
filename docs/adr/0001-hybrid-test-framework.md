@@ -166,8 +166,9 @@ CON-16 rejected A2 behind a falsifiable condition, and named the test:
 > **combined with** per-edge timeout and retry ordering interacting. Write that scenario first.
 
 **The rubric has since written the scenarios, and S3 was built and measured.**
-`tests/rubric_scenarios.rs` @ `e548a03` implements it: 5 tests, all passing, including
-`s3_never_reports_a_partition_as_success` and `s3_is_byte_for_byte_reproducible`. S3 is the
+`tests/rubric_scenarios.rs` implements it: 5 tests, all passing, including
+`s3_never_reports_a_partition_as_success` and `s3_is_byte_for_byte_reproducible`. The original `e548a03`
+citation is historical only; the file is reachable on `master` since `d3845c4`. S3 is the
 mid-flight-partition scenario. It is expressible in the incumbent simulator.
 
 **The trigger is falsified for the scenario the rubric actually ratified.** A2 stays rejected, now on
@@ -322,8 +323,9 @@ Steps 2 and 4 are independent. **Step 3 is the one that matters** — it is the 
 justifies the word "hybrid". Without it, D is two suites, and §8 applies at full force.
 
 Prerequisites already delivered and not repeated here: `link.rs` + `dag_sim.rs` committed and asserted
-(G1, 12 tests); `RunReport` with all four §4.5 metrics emitted (O1's shape); `emit_report.rs` writing
-versioned `.json` + `.md` pairs (O1's write path, but **not invoked by CI** — that is O2, unbuilt).
+(G1, 12 tests); `RunReport` with all four §4.5 metrics emitted (O1's shape) and reachable on `master`
+since `d3845c4`; `emit_report.rs` writing versioned `.json` + `.md` pairs (O1's write path, but
+**not invoked by CI** — that is O2, unbuilt).
 
 ---
 
@@ -442,8 +444,8 @@ Falsifiable, in the rubric's own terms:
 
 ## 12. Verification performed for this ADR
 
-Run in a **clean `git worktree` at `e548a03`** (the shared working tree does not compile; see below),
-rust `1.94.1`:
+Run in a **clean `git worktree` at `d3845c4`** (the `master` commit that reconstructs the original
+local-only `e548a03`/`215c65f` evidence), rust `1.94.1`:
 
 ```
 $ cargo test -p consortium-fanout-sim --test rubric_scenarios --test report_schema
