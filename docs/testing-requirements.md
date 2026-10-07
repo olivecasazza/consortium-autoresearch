@@ -6,30 +6,24 @@ baseline lock-in for the regression gates ([CON-20](/CON/issues/CON-20), [CON-21
 
 Evidence base: `olivecasazza/consortium-autoresearch` @ `f3acd8e`, plus the
 [`test-asset-inventory`](/CON/issues/CON-17#document-test-asset-inventory) (revision `fd7b4e56`),
-plus CON-18's measured corrections @ `e548a03` — a branch that was never pushed and no longer exists
-in any ref of this repository (see the provenance note below).
+plus CON-18's measured corrections that were later reconstructed on `master` at `d3845c4`.
 Every number in §3 is either **measured** (reproducible command given) or **derived** (formula shown).
 Numbers that are neither are labelled **target** and are explicitly *not* yet evidence.
 
-> **Provenance note (added when this document landed on `master`, CON-123).** Two commits cited
-> throughout this rubric are **not reachable from GitHub**:
+> **Provenance note (updated after CON-123 and CON-435).** This rubric originally cited two local-only
+> commits that were not reachable from GitHub: `e548a03` (`tests/rubric_scenarios.rs`) and `215c65f`
+> (`src/report.rs`, `examples/emit_report.rs`, and `tests/report_schema.rs`). Those dangling commits
+> remain historical provenance only; do not use them as checkout targets.
 >
-> - `e548a03` — `tests/rubric_scenarios.rs` (S2/S3 reference scenarios) and `215c65f` —
->   `src/report.rs` + `tests/report_schema.rs` (the `RunReport` schema), both on the local branch
->   `feat/con-18-report-schema`, were never pushed and are absent from every branch and PR ref in
->   this repository. The only surviving copy of `9bd3458` (this document) is on the ref of the
->   withdrawn PR #28.
-> - Every §3 figure attributed to `e548a03` (the 115-test count, the `report_schema` and
->   `rubric_scenarios` breakdowns, and the S2/S3 corrections in §5) is therefore **not currently
->   reproducible from a clean checkout**, and the `cargo test` commands quoted alongside them will
->   not find those suites.
+> The referenced code has since been reconstructed and landed on `master` at `d3845c4`:
 >
-> The rubric's *decision content* — the framework scoring, the budget rubric, and the S1–S3
-> acceptance criteria — is unaffected and is what this landing makes readable. What is still missing
-> is the code those numbers measure; that gap is tracked on [CON-123](/CON/issues/CON-123) and is
-> not closed by this commit. Treat `e548a03`-attributed counts as **historical measurements**, not
-> as reproducible evidence, until those commits are reconstructed or re-measured.
-
+> - `crates/consortium-fanout-sim/tests/rubric_scenarios.rs` — S2/S3 reference scenarios.
+> - `crates/consortium-fanout-sim/tests/report_schema.rs` and `crates/consortium-fanout-sim/src/report.rs`
+>   — the `RunReport` schema and assertions.
+> - `crates/consortium-fanout-sim/examples/emit_report.rs` — the report emitter.
+>
+> Treat every remaining `e548a03` attribution below as a historical label for the original measurement,
+> and use `d3845c4` or newer `master` to reproduce it.
 > **Re-measured at `f3acd8e` (2026-09-27).** The measured baseline moved substantially since `d087a48`:
 > the suite grew **35 → 89 tests** and **5.2 s → 111 s** of test time, and `link.rs` / `dag_sim.rs`
 > are now **committed and green** rather than uncommitted. §3, §4.1, and §5 are updated to match.
@@ -37,10 +31,10 @@ Numbers that are neither are labelled **target** and are explicitly *not* yet ev
 > does not compile** (`consortium/src/task_timer.rs:91` — `dyn EventHandler: Debug`, 1 error), so
 > all measurements were taken from a clean `git worktree` at `f3acd8e`, not the dirty tree.
 >
-> **Updated at `e548a03` from CON-18's measured corrections.** The suite is now **115 tests**
-> (89 + 10 `report_schema.rs` + 10 `rubric_scenarios.rs` + 6 `report.rs` unit), and S1–S3 are
-> **built and measured** rather than projected. **S2's two defective rows were removed** after they
-> were shown unsatisfiable — see §5 S2. Where a CON-18 measurement differs from the `f3acd8e`
+> **Updated from CON-18's measured corrections, reconstructed on `master` at `d3845c4`.** The suite is
+> now **115 tests** (89 + 10 `report_schema.rs` + 10 `rubric_scenarios.rs` + 6 `report.rs` unit), and
+> S1–S3 are **built and measured** rather than projected. **S2's two defective rows were removed** after
+> they were shown unsatisfiable — see §5 S2. Where a CON-18 measurement differs from the `f3acd8e`
 > figure, the CON-18 figure is cited as the later measurement and the discrepancy is noted rather
 > than silently overwritten.
 
@@ -131,18 +125,18 @@ Two facts the decision needs, and they are the reason §3.3's budget is stated t
 
 Both new files cap at `SCALES = [64, 256, 1024]`. **Nothing in the asserted suite exercises N > 1024.**
 
-**Refreshed at `e548a03`: 89 → 115 tests.** CON-18 added 26 more: 10 in `report_schema.rs`, 10 in
+**Reconstructed on `master` at `d3845c4`: 89 → 115 tests.** CON-18 added 26 more: 10 in `report_schema.rs`, 10 in
 `rubric_scenarios.rs` (this rubric's S2 and S3, §5), and 6 unit tests in `report.rs`. The cost
 distribution below is the one that matters for §3.3, and the additions do not change it: the
 N=1024 sweep remains the cost centre, and the new files are single-scale or small-N by construction —
 `rubric_scenarios.rs` is N=256 throughout, which is why S2 and S3 measure 0.30 s each.
 
 > **Why the count kept moving.** Three different counts are quoted across the decision thread — 35
-> (the original briefing), 89 (this table at `f3acd8e`), 105 (CON-18's first report at `e548a03`),
-> and 115 (final at `e548a03`, after the 10 `rubric_scenarios.rs` tests landed). A **static count of
-> `#[test]` attributes at `e548a03` is 115** (`src/`: 58, `tests/`: 57). Quote 115 against a named
-> commit, never a bare number — the suite has roughly tripled inside three days and a count without a
-> SHA is meaningless.
+> (the original briefing), 89 (this table at `f3acd8e`), 105 (CON-18's first report on the historical
+> local branch), and 115 (reconstructed on `master` at `d3845c4`, after the 10 `rubric_scenarios.rs`
+> tests landed). A **static count of `#[test]` attributes at `d3845c4` is 115** (`src/`: 58,
+> `tests/`: 57). Quote 115 against a named commit, never a bare number — the suite has roughly tripled
+> inside three days and a count without a SHA is meaningless.
 
 
 ### 3.2 Scale-ceiling sizing sweep
@@ -178,7 +172,7 @@ Four facts the decision needs:
    anomaly independently and flagged it the same way. Wall time, by contrast, is consistent across
    both measurement runs — **size memory against the power of two, not against N=10 000's reading.**
 
-**Independent re-measurement (CON-18, `e548a03`).** The sweep was repeated in a second environment and
+**Independent re-measurement (CON-18 historical branch; reconstructed on `master` at `d3845c4`).** The sweep was repeated in a second environment and
 lands within ~15 % on wall time, with the same ordering and the same practical conclusion:
 
 | N | 64 | 256 | 1024 | 2048 | 4096 | 8192 | 10000 | 12288 |
@@ -290,7 +284,7 @@ property in S3 (never report a node converged without a live path) is the part t
 
 - F1 — mid-flight partition (`PartitionAtRound`) re-routes rather than aborts: cascade converges or
   fails with a correct error tree, and never reports a node converged without a live path.
-  **Status: met** — as of `e548a03` this is no longer the row's weakest point. S3
+  **Status: met** — on `master` since `d3845c4` this is no longer the row's weakest point. S3
   (`rubric_scenarios.rs`) asserts the no-false-convergence half directly: at N=256 with 5 % loss and
   a mid-flight partition, 255 nodes converge via surviving paths and the 256th is reported
   `Partitioned`, not converged. Previously this half was only driven in `fuzz.rs` under generic
@@ -323,7 +317,7 @@ Targets, with the measured cost each implies:
 | PR-advisory | 2 048 | 0 | 16.0 s debug — warns, does not block |
 | Nightly | 4 096 | 25 + 5 GPU + 2 login + 1 controller | 9.3 s release; containerized cluster is the existing `start_default()` size |
 | Weekly sizing | 8 192 – 12 000 | 0 | report-only; RSS steps in powers of two |
-| **Requirement** | **10 000** | **~100** | **measured achievable: ~90–100 s, 3.3 GB, release** — independently re-measured at `e548a03` (§3.2) |
+| **Requirement** | **10 000** | **~100** | **measured achievable: ~90–100 s, 3.3 GB, release** — independently re-measured on the CON-18 historical branch (§3.2) |
 
 > **The asserted ceiling is 1024, and it is asserted three times over.** `scale_smoke.rs`,
 > `scale_failures.rs`, and `deploy_dag.rs` all pin `SCALES = [64, 256, 1024]`. N=10 000 has been
@@ -364,7 +358,7 @@ Do **not** score a virtual clock as existing capability. Score the contract in �
 | # | Requirement | Status |
 |---|---|---|
 | D1 | Byte-identical `CascadeResult` for fixed seed | **asserted** — `scenario_is_deterministic_in_seed` (`fuzz.rs:259`), and `failed_runs_stay_reproducible_at_scale` (`scale_failures.rs:226`, at 3 scales) |
-| D1b | Byte-identical **report artifact** for fixed seed | **asserted** since `e548a03` — `the_report_is_byte_identical_across_repeated_runs_of_one_seed` (`report_schema.rs:78`), over `to_json` *and* `to_markdown`. This is the row that makes a stored report usable as a regression baseline (O3) |
+| D1b | Byte-identical **report artifact** for fixed seed | **asserted** on `master` since `d3845c4` — `the_report_is_byte_identical_across_repeated_runs_of_one_seed` (`report_schema.rs:78`), over `to_json` *and* `to_markdown`. This is the row that makes a stored report usable as a regression baseline (O3) |
 | D2 | Every failure draw is a pure function of `(seed, round, src, tgt)` — no RNG state leakage between edges | **asserted by construction** (`fixtures.rs:228-235`); not independently tested |
 | D3 | Jitter/loss draws seeded per-edge, so adding a node does not perturb a sibling's timing | **asserted** — `Jitter::sample` (`link.rs:143`) is a pure fn of `(seed, src, tgt)`, and `reports_are_reproducible_at_every_scale` (`deploy_dag.rs:105`) proves it at 3 scales. Promoted from target at `f3acd8e` |
 | D4 | Every scenario is addressable by a single stable id (seed + N + profile) that can be pasted into a bug report | **target** — still no scenario registry; the three "realistic fleet" configs are hand-duplicated across `deploy_dag.rs` and `scale_failures.rs` with no shared constant |
@@ -404,7 +398,7 @@ Required structured metrics, per scenario run:
 | per-edge throughput | **emitted** — `RunReport::edge_throughput` (`report.rs:257`), every successful edge, sorted by `(src, tgt)` |
 | failure subtrees | **emitted** — `RunReport::failure_subtree` (`report.rs:259`) |
 
-**All four were "derivable but not emitted" at `f3acd8e`. All four are emitted at `e548a03`.** The
+**All four were "derivable but not emitted" at `f3acd8e`. All four are emitted on `master` since `d3845c4`.** The
 first draft of this rubric said the shape existed only in the uncommitted `calibration.rs`; that is no
 longer the target shape — `RunReport` *is* the target shape, and it is the better of the two, because
 it is asserted (10 tests in `report_schema.rs`) and version-stamped rather than merely sketched.
@@ -461,7 +455,7 @@ These four are the baseline lock-in. Each states its **measurement** (so it is r
 - **[derived]** — computed from the measured model; becomes an assertion when adopted.
 - **[target]** — a number chosen for the framework to hit; **not** evidence of anything today.
 
-**Adoption status as of `e548a03`: S1, S2, and S3 are all `[measured]` and asserted in
+**Adoption status on `master` as of `d3845c4`: S1, S2, and S3 are all `[measured]` and asserted in
 `tests/rubric_scenarios.rs` and `tests/scale_smoke.rs`. S4 remains `[target]` — its simulation half is
 asserted at N ≤ 1024, its calibration half is unbuilt.** Two thresholds were **removed** during
 adoption rather than kept as aspirational, because they were unsatisfiable (S2, both rows) — see below.
@@ -491,7 +485,7 @@ Rates are given in **bytes/sec** because that is the sim's unit. 50 Mbit/s = 6 2
 >
 > **Two parameters were removed from this scenario after it was built and measured.** Both were inert —
 > specified but incapable of affecting the result. See the two rows marked ❌ below. The scenario is
-> now built as `tests/rubric_scenarios.rs` (CON-18, `e548a03`), 5 tests, all passing.
+> now built as `tests/rubric_scenarios.rs` (CON-18, reconstructed on `master` at `d3845c4`), 5 tests, all passing.
 >
 > **Correction: this is a homogeneous-uplink fleet, not a two-zone one.** The first draft called it
 > "two zones" because the bimodal edge bandwidth *sounded* like zoning. It is not. After the inert
@@ -551,7 +545,7 @@ model trips a test instead of passing silently.
 ### S3 — Packet loss + mid-flight partition (PR-blocking, `[measured]`)
 
 > N=256, **5 % per-chunk loss**, plus one subtree partitioned **mid-flight** at round 4, seed fixed.
-> Built and measured as `tests/rubric_scenarios.rs` (CON-18, `e548a03`), 5 tests, all passing.
+> Built and measured as `tests/rubric_scenarios.rs` (CON-18, reconstructed on `master` at `d3845c4`), 5 tests, all passing.
 
 | Threshold | Value | Status |
 |---|---|---|
@@ -675,9 +669,8 @@ These are decisions, not gaps in the rubric. Each needs an owner.
 
 ```bash
 git clone https://github.com/olivecasazza/consortium-autoresearch && cd consortium-autoresearch
-git checkout f3acd8e                      # clean tree; the shared working tree does not compile
-                                          # §5 S2/S3 measurements are on CON-18's local branch
-                                          # feat/con-18-report-schema @ e548a03 — not pushed
+git checkout d3845c4                      # clean master tree containing the reconstructed S2/S3
+                                          # reference scenarios and RunReport schema
 
 export PATH="$HOME/.cargo/bin:$PATH"
 
@@ -700,12 +693,12 @@ for n in [1024,4096,8192,10000,12000]:
                    capture_output=True)
     print(n, resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss/1024, 'MB')"
 
-# §5 — the rubric's own reference scenarios (CON-18, e548a03)
+# §5 — the rubric's own reference scenarios (reconstructed on master at d3845c4)
 cargo test -p consortium-fanout-sim --test rubric_scenarios
 cargo test -p consortium-fanout-sim --test report_schema
 
 # §4.5 — emit the versioned report artifact (O1)
-cargo run --release --example emit_report -p consortium-fanout-sim
+cargo run --example emit_report -p consortium-fanout-sim
 ```
 
 **Two things to know before re-measuring.** `cargo nextest` is not installed in the measurement
