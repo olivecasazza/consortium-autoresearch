@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["executor","fixtures","scenario"]};
+window.SIDEBAR_ITEMS = {"mod":["dag_sim","executor","fixtures","link","report","scenario"]};

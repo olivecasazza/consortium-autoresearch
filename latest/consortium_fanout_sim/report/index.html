@@ -1,0 +1,40 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Per-run result report in the schema consumed by CON-20 (“Observability &#38; structured test-report pipeline”)."><title>consortium_fanout_sim::report - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-77263533.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="consortium_fanout_sim" data-themes="" data-resource-suffix="" data-rustdoc-version="1.94.1 (e408947bf 2026-03-25)" data-channel="1.94.1" data-search-js="search-9e2438ea.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-c38705f0.js" ><script src="../../static.files/storage-e2aeef58.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../static.files/main-7bab91a1.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-ffcac47a.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc mod"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Module report</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../consortium_fanout_sim/index.html">consortium_<wbr>fanout_<wbr>sim</a><span class="version">0.1.0</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Module report</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#example" title="Example">Example</a></li></ul><h3><a href="#structs">Module Items</a></h3><ul class="block"><li><a href="#structs" title="Structs">Structs</a></li><li><a href="#constants" title="Constants">Constants</a></li></ul></section><div id="rustdoc-modnav"><h2 class="in-crate"><a href="../index.html">In crate consortium_<wbr>fanout_<wbr>sim</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">consortium_fanout_sim</a></div><h1>Module <span>report</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/consortium_fanout_sim/report.rs.html#1-735">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Per-run result report in the schema consumed by CON-20 (“Observability
+&amp; structured test-report pipeline”).</p>
+<p><a href="consortium_nix::cascade_trace::CascadeTrace::to_json"><code>CascadeTrace::to_json</code></a>
+emits the <em>raw</em> per-round trace: plan, outcomes, parent chain. This
+module derives the <em>metrics</em> the report pipeline aggregates across
+runs:</p>
+<div><table><thead><tr><th>metric</th><th>source</th></tr></thead><tbody>
+<tr><td>fan-out depth</td><td>final <code>parent_chain</code></td></tr>
+<tr><td>time-to-converge</td><td>cumulative round durations</td></tr>
+<tr><td>per-edge throughput</td><td>successful edge outcomes x closure size</td></tr>
+<tr><td>failure subtrees</td><td>[<code>CascadeError</code>] tree, shape preserved</td></tr>
+<tr><td>per-phase timings</td><td><a href="../dag_sim/struct.DagSimReport.html" title="struct consortium_fanout_sim::dag_sim::DagSimReport"><code>DagSimReport</code></a> stage timings</td></tr>
+</tbody></table>
+</div>
+<p>Both exporters are deterministic for a given seed: every collection
+is sorted by node id before emission, so two runs of the same scenario
+produce byte-identical JSON. That is what makes the report usable as
+a regression baseline.</p>
+<h2 id="example"><a class="doc-anchor" href="#example">§</a>Example</h2>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>consortium_fanout_sim::report::RunReport;
+<span class="kw">use </span>consortium_fanout_sim::scenario::{Scenario, ScenarioConfig};
+<span class="kw">use </span>consortium_nix::cascade::{CascadeStrategy, Log2FanOut};
+<span class="kw">use </span>consortium_nix::cascade_trace::TraceRecorder;
+
+<span class="kw">let </span>cfg = ScenarioConfig { seed: <span class="number">7</span>, n_nodes: <span class="number">32</span>, ..ScenarioConfig::default() };
+<span class="kw">let </span>rec = TraceRecorder::new();
+<span class="kw">let </span>(result, trace) = Scenario::new(cfg.clone()).run_traced(<span class="kw-2">&amp;</span>Log2FanOut, <span class="kw-2">&amp;</span>rec);
+
+<span class="kw">let </span>report = RunReport::from_cascade(
+    RunReport::meta(<span class="kw-2">&amp;</span>cfg, Log2FanOut.name()),
+    <span class="kw-2">&amp;</span>result,
+    <span class="kw-2">&amp;</span>trace,
+    cfg.closure_bytes,
+);
+<span class="macro">assert_eq!</span>(report.fan_out_depth, <span class="number">5</span>);
+<span class="macro">assert!</span>(report.is_success());
+<span class="kw">let </span>json = report.to_json();
+<span class="macro">assert!</span>(json.contains(<span class="string">"\"schema_version\": 1"</span>));</code></pre></div></div></details><h2 id="structs" class="section-header">Structs<a href="#structs" class="anchor">§</a></h2><dl class="item-table"><dt><a class="struct" href="struct.EdgeThroughput.html" title="struct consortium_fanout_sim::report::EdgeThroughput">Edge<wbr>Throughput</a></dt><dd>Throughput of one successful cascade edge.</dd><dt><a class="struct" href="struct.FailureSubtree.html" title="struct consortium_fanout_sim::report::FailureSubtree">Failure<wbr>Subtree</a></dt><dd>A failed subtree, mirroring the shape of the [<code>CascadeError</code>] tree.</dd><dt><a class="struct" href="struct.NodeConvergence.html" title="struct consortium_fanout_sim::report::NodeConvergence">Node<wbr>Convergence</a></dt><dd>One node’s position in the cascade tree, and when it converged.</dd><dt><a class="struct" href="struct.PhaseTiming.html" title="struct consortium_fanout_sim::report::PhaseTiming">Phase<wbr>Timing</a></dt><dd>Timing for one phase of the nix-deploy DAG.</dd><dt><a class="struct" href="struct.RunMeta.html" title="struct consortium_fanout_sim::report::RunMeta">RunMeta</a></dt><dd>Scenario identity, so a report is self-describing in an artifact dir.</dd><dt><a class="struct" href="struct.RunReport.html" title="struct consortium_fanout_sim::report::RunReport">RunReport</a></dt><dd>One simulated run, in the CON-20 report schema.</dd></dl><h2 id="constants" class="section-header">Constants<a href="#constants" class="anchor">§</a></h2><dl class="item-table"><dt><a class="constant" href="constant.SCHEMA_VERSION.html" title="constant consortium_fanout_sim::report::SCHEMA_VERSION">SCHEMA_<wbr>VERSION</a></dt><dd>Version of the emitted JSON schema. Bump on any breaking field change
+so a baseline recorded by an older run is rejected rather than
+silently misread.</dd></dl></section></div></main></body></html>

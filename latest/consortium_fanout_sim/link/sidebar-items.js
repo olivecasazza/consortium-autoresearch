@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["MTU_BYTES"],"enum":["LinkDirection","PacketLoss"],"struct":["Jitter","LinkModel"]};
