@@ -19,6 +19,9 @@
 //! - [`scenario::Scenario`] — high-level wrapper that builds a
 //!   complete cascade run (nodes + seeded set + network + executor +
 //!   strategy) from a seed and a few descriptors.
+//! - [`report::RunReport`] — per-run metrics in the CON-20 report
+//!   schema: fan-out depth, time-to-converge, per-edge throughput,
+//!   failure subtrees, and deploy-phase timings.
 //!
 //! ## Quick start
 //!
@@ -42,10 +45,19 @@
 //! assert_eq!(result.converged.len(), 64);
 //! ```
 
+pub mod dag_sim;
 pub mod executor;
 pub mod fixtures;
+pub mod link;
+pub mod report;
 pub mod scenario;
 
+pub use dag_sim::{DagSimReport, DeployDagSim, DeployStage, StageSchedule, StageTiming};
 pub use executor::DeterministicExecutor;
 pub use fixtures::{BandwidthDistribution, FailureSchedule, SeedDistribution, UplinkDistribution};
+pub use link::{Jitter, LinkDirection, LinkModel, PacketLoss};
+pub use report::{
+    EdgeThroughput, FailureSubtree, NodeConvergence, PhaseTiming, RunMeta, RunReport,
+    SCHEMA_VERSION,
+};
 pub use scenario::{Scenario, ScenarioConfig};
