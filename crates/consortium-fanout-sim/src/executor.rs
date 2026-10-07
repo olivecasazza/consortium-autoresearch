@@ -4,7 +4,7 @@
 //! `bytes / bandwidth + latency` plus a logarithmic slow-start
 //! penalty, optionally with packet loss, jitter, and asymmetric-link
 //! contention — consults a
-//! [`FailureSchedule`](crate::fixtures::FailureSchedule) to decide
+//! [`FailureSchedule`] to decide
 //! whether each edge succeeds or fails, and returns the result map the
 //! cascade coordinator expects.
 

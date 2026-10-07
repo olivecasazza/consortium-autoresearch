@@ -104,7 +104,7 @@ impl Scenario {
     /// Run the cascade with a custom [`LinkModel`].
     ///
     /// [`Self::run`] is exactly this with a lossless, zero-jitter
-    /// model. Pass a model with [`PacketLoss`] and jitter to price a
+    /// model. Pass a model with packet loss and jitter to price a
     /// lossy, noisy fabric. The link model only affects edge
     /// *durations*; failure decisions still come from
     /// `cfg.failures` and `NetworkProfile::partitions`.
