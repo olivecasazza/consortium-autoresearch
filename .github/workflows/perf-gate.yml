@@ -1,0 +1,412 @@
+name: Perf Gate
+
+# Performance-regression detection for the criterion benches.
+#
+# Shape borrowed from migration-scorecard.yml: measure, gate, publish. The gate
+# logic itself is in autoresearch/scripts/perf-gate.sh — this workflow only
+# supplies the measurement and the baseline.
+#
+# The verdict comes from a PAIRED measurement: the base commit and the PR head
+# are benched back to back in the same job, on the same host. That is not an
+# optimisation, it is the only way the number means anything — see the comment
+# above the base checkout for the measurement that forced it. A baseline stored
+# in a previous job was measured on a different VM, and those differ by tens of
+# percent, which swamps any threshold worth having.
+#
+# The committed baseline (autoresearch/perf-baselines/refs/{heads,tags}/<ref>.json,
+# written by the `Record perf baseline` job) is kept for a different job: it is
+# the reviewable, pinnable record of what this branch measured, so a change in
+# the committed number is itself a reviewable event. It is not the verdict.
+#
+# Thresholds are intentionally split:
+#   soft (5%)  -> a comment on the PR, build stays green
+#   hard (10%) -> the build fails
+#
+# Rationale: a hard-only gate trains people to ignore red. A soft band that
+# still reports loudly teaches the trend without blocking a 6% swing.
+# Paired measurement is what makes a 5/10 split credible: the same-host spread
+# is well under 1%, so 5% is genuinely a drift and 10% is genuinely a regression.
+
+on:
+  # CON-209: the `branches:` filter is gone, for the same reason it is gone
+  # from ci.yml. This repo stacks PRs, so a `branches:` filter restricted the
+  # gate to the integration lines and left every stacked PR running no gate and
+  # reporting nothing -- `gh pr checks` prints "no checks reported on the
+  # '<branch>' branch", which reads as "nothing to see" rather than "no signal".
+  # Dropping it makes a PR run the gate against whatever same-repo branch it
+  # targets. It does not add duplicate runs: `pull_request` fires once per PR.
+  pull_request:
+    paths-ignore:
+      - 'doc/**'
+      - 'docs-index/**'
+      - '*.md'
+      - '.gitignore'
+  push:
+    branches: [main, master, develop, sync-upstream-1.10.1]
+    tags: ['v*']
+    paths-ignore:
+      - 'doc/**'
+      - 'docs-index/**'
+      - '*.md'
+      - '.gitignore'
+  # Re-measure and (optionally) commit a refreshed baseline on demand — after a
+  # runner change, a toolchain bump, or a noisy-host incident.
+  workflow_dispatch:
+    inputs:
+      # github.base_ref is only populated on pull_request. On workflow_dispatch
+      # it is the empty string, and the gate job below used to pass that straight
+      # into `perf-baseline.sh store --ref ''`, which exits 2 ("store needs
+      # --ref") and turns the whole job red. Run 36343727084 is the reproduction.
+      # So the base is an explicit input here, defaulting to the repo's default
+      # branch, and resolved once in the `Resolve the base ref` step.
+      base_ref:
+        description: "Branch to measure the current ref against (workflow_dispatch only)"
+        type: string
+        default: ''
+      update_baseline:
+        description: "Commit a freshly measured baseline for the current ref"
+        type: boolean
+        default: false
+      soft_pct:
+        description: "Soft threshold (%) — comment, don't fail"
+        type: string
+        default: '5'
+      hard_pct:
+        description: "Hard threshold (%) — fail the build"
+        type: string
+        default: '10'
+
+concurrency:
+  group: perf-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Keep the bench set narrow and stable: these six numbers are the gate, and
+  # churning the metric set makes every baseline incomparable to the last.
+  PERF_BENCH_FILTER: '^cascade_strategies/(uniform|bimodal)/256/'
+
+jobs:
+  # ── Measure + gate the PR head against the base branch's baseline ────────
+  gate:
+    name: Perf Regression Gate
+    # push is the baseline job's event; only measure against a base on the
+    # events that actually have one.
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    # This repo sets default_workflow_permissions=read, so the report-comment
+    # step below would 403 on createComment without an explicit grant.
+    permissions:
+      contents: read
+      pull-requests: write
+    outputs:
+      verdict: ${{ steps.gate.outputs.verdict }}
+    steps:
+      # Resolve the base ref once, before anything can consume it. Every step
+      # below reads steps.ctx.outputs.base_ref rather than github.base_ref
+      # directly: the two events that reach this job do not agree on that
+      # context, and a per-step fallback is exactly how run 36343727084 shipped
+      # an empty --ref into the baseline store.
+      - name: Resolve the base ref
+        id: ctx
+        run: |
+          set -euo pipefail
+          base='${{ github.base_ref }}'
+          if [[ -z "$base" ]]; then base='${{ inputs.base_ref }}'; fi
+          if [[ -z "$base" ]]; then base='${{ github.event.repository.default_branch }}'; fi
+          if [[ -z "$base" ]]; then
+            echo "::error::No base ref to measure against: pass base_ref, or run from a pull_request."
+            echo "base_ref=" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          echo "Measuring '${{ github.ref_name }}' against '$base' in one job, on one host."
+          echo "base_ref=$base" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust
+        # rust-toolchain.toml in the repo root pins 1.94.1, and a toolchain
+        # file outranks the rustup default, so cargo benches on the pin even
+        # though this installs stable. Keep @stable to match ci.yml/tests.yml.
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install jq
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq
+
+      # Criterion's --quick still needs the bench built in release mode. Cache
+      # the target dir so the second and later runs don't rebuild the world.
+      - name: Cache cargo target
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: perf-gate-head-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: perf-gate-head-
+
+      - name: Run criterion benches (PR head)
+        run: |
+          timeout 1500 cargo bench -p consortium-fanout-sim \
+            --bench cascade_strategies -- "$PERF_BENCH_FILTER" --quick
+
+      # ── Paired measurement ────────────────────────────────────────────────
+      #
+      # The stored baseline cannot be the verdict, because a stored baseline and
+      # the PR head are almost never measured on the same machine. Measured on
+      # this repo, two criterion runs of ONE commit had a 95% CI of 0.08%
+      # within each run, while the two runs' means differed by 45% and 82%
+      # (runs 36297226582 attempt 1 and 2 vs the stored baseline). That gap is
+      # not sampling noise -- it is the runner: each job lands on a different
+      # VM whose sustained throughput differs by tens of percent. No threshold
+      # below that spread can distinguish a real regression from a faster host.
+      #
+      # So measure the base commit and the PR head in the SAME job, back to back,
+      # on the SAME host. The host term cancels and what is left is the change
+      # under test. This costs a second bench run; it is the only way the number
+      # means anything.
+      - name: Check out the base commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.ctx.outputs.base_ref }}
+          path: base
+          # Shallow is enough: we build the base, we do not diff it.
+          fetch-depth: 1
+
+      - name: Cache base cargo target
+        uses: actions/cache@v4
+        with:
+          path: base/target
+          # A separate key from the head cache on purpose: actions/cache stores
+          # the paths it archived *under that key*, so sharing one key would
+          # archive target/ or base/target/ but never both, and whichever side
+          # lost would rebuild from cold on every run.
+          key: perf-gate-base-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: perf-gate-base-
+
+      - name: Run criterion benches (base commit)
+        run: |
+          cd base
+          timeout 1500 cargo bench -p consortium-fanout-sim \
+            --bench cascade_strategies -- "$PERF_BENCH_FILTER" --quick
+
+      - name: Build the paired baseline
+        id: baseline
+        run: |
+          mkdir -p .perf-gate
+          BASE='${{ steps.ctx.outputs.base_ref }}'
+          # Convert the base's criterion tree into a baseline document using the
+          # converter from the PR head, not from base/. perf-baseline.sh is the
+          # gate's own tooling, not the code under test -- the code under test is
+          # the bench, and that came out of base/target/criterion. Using the
+          # base's copy meant the gate could not run on the very PR that
+          # introduced the gate, because the base did not have the script yet.
+          # It also keeps the writer and the reader on one version, so the JSON
+          # shape perf-gate.sh parses is the shape perf-baseline.sh wrote.
+          #
+          # The result goes to a scratch dir and is never committed. Ask resolve
+          # where it landed rather than predicting the filename -- the two must
+          # not be able to drift apart.
+          if bash autoresearch/scripts/perf-baseline.sh store \
+               --ref "$BASE" \
+               --dir .perf-gate/paired \
+               --est base/target/criterion \
+               --notes "paired with ${{ github.sha }} on the same host" \
+               > /dev/null 2>.perf-gate/store.log \
+             && bash autoresearch/scripts/perf-baseline.sh resolve \
+               --dir .perf-gate/paired --ref "$BASE" \
+               > .perf-gate/path 2>>.perf-gate/store.log; then
+            cp "$(cat .perf-gate/path)" .perf-gate/baseline.json
+            echo "Paired baseline: $BASE measured in-job -> .perf-gate/baseline.json"
+            jq -r '"  " + (.metrics | to_entries[] | "\(.key)=\(.value)")' \
+              .perf-gate/baseline.json
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            # A gate that cannot measure must not read as green. perf-gate.sh
+            # refuses to pass on no signal, and so does this workflow.
+            echo "::error::Could not measure the base commit in-job; the gate has no signal."
+            sed 's/^/::error::  /' .perf-gate/store.log || true
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Gate
+        id: gate
+        if: steps.baseline.outputs.found == 'true'
+        continue-on-error: true
+        run: |
+          set +e
+          bash autoresearch/scripts/perf-gate.sh \
+            --current target/criterion \
+            --baseline .perf-gate/baseline.json \
+            --soft-pct '${{ inputs.soft_pct || 5 }}' \
+            --hard-pct '${{ inputs.hard_pct || 10 }}' \
+            > .perf-gate/report.md
+          RC=$?
+          set -e
+
+          # 0 = pass or warn, 1 = hard fail, 3 = no signal. Only 1 fails the
+          # build; 3 is surfaced loudly rather than passed off as green.
+          case "$RC" in
+            0) VERDICT=pass ;;
+            1) VERDICT=fail ;;
+            3) VERDICT=no-signal ;;
+            *) VERDICT=error ;;
+          esac
+          echo "verdict=$VERDICT" >> "$GITHUB_OUTPUT"
+          echo "exit_code=$RC" >> "$GITHUB_OUTPUT"
+
+          cat .perf-gate/report.md >> "$GITHUB_STEP_SUMMARY"
+          echo "### Perf gate exit: $RC ($VERDICT)" >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ "$RC" == 3 ]]; then
+            echo "::error::Perf gate had no signal (no usable estimates or baseline)."
+            exit 1
+          fi
+          exit "$RC"
+
+      - name: Post perf report to the PR
+        # pull_request only. On workflow_dispatch there is no issue to comment
+        # on, and `context.issue.number` throws rather than returning undefined,
+        # so the step would fail and take the whole job with it. The report still
+        # reaches the run: the Gate step writes it to $GITHUB_STEP_SUMMARY and
+        # the upload step below archives it.
+        if: always() && steps.gate.outputs.verdict != '' && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const reportPath = '.perf-gate/report.md';
+            if (!fs.existsSync(reportPath)) return;
+            const body = fs.readFileSync(reportPath, 'utf8').slice(0, 60000);
+            if (!body.trim()) return;
+            const marker = '<!-- perf-gate-report -->';
+            // Collapse repeated reports from the same run into one comment.
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: context.issue.number, per_page: 100,
+            });
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                comment_id: existing.id, body: `${marker}\n${body}`,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: context.issue.number, body: `${marker}\n${body}`,
+              });
+            }
+
+      - name: Upload perf report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-gate-report-${{ github.run_id }}
+          path: |
+            .perf-gate/
+            target/criterion/**/new/estimates.json
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Enforce hard threshold
+        # Single place that actually turns the verdict red, so the soft/warn
+        # path above can never accidentally fail the build. The Gate step runs
+        # with continue-on-error, so *every* non-green verdict has to be caught
+        # here or it reports success: 'error' (usage failure) and 'no-signal'
+        # (dead bench) must not read as a pass.
+        if: >-
+          steps.gate.outputs.verdict != 'pass' ||
+          (steps.baseline.outputs.found != 'true' && steps.baseline.outputs.found != '')
+        run: |
+          if [[ "${{ steps.baseline.outputs.found }}" != 'true' && -z "${{ steps.gate.outputs.verdict }}" ]]; then
+            echo "::error::No paired baseline: the base commit could not be measured in this job, so there is nothing to compare against. Not reporting green."
+            exit 1
+          fi
+          case "${{ steps.gate.outputs.verdict }}" in
+            fail) echo "::error::Perf regression at or above the hard threshold." ;;
+            *)    echo "::error::Perf gate could not produce a verdict (${{ steps.gate.outputs.verdict }}, exit ${{ steps.gate.outputs.exit_code }}). Treating a perf gate that cannot measure as a failure, not a pass." ;;
+          esac
+          exit 1
+
+  # ── Refresh the stored baseline for the branch or tag ────────────────────
+  baseline:
+    name: Record perf baseline
+    # Default-branch pushes are excluded here rather than at the PR step below.
+    # The PR step can only open a PR for a non-default branch, so a default-branch
+    # push used to spend ~25 minutes of runner measuring a baseline it then threw
+    # away. That was cheap to ignore while this workflow only ran on
+    # sync-upstream-1.10.1; on master it is the most frequent event in the repo.
+    # Refresh master explicitly: dispatch this workflow with update_baseline=true.
+    #
+    # Tag pushes are excluded for a different reason: create-pull-request's `base`
+    # has to be a branch, and `github.ref_name` on a tag push is the tag. Recording
+    # a tag baseline needs a direct push to the tag, which is a separate decision.
+    if: >-
+      (github.event_name == 'push' &&
+       github.ref != format('refs/heads/{0}', github.event.repository.default_branch) &&
+       !startsWith(github.ref, 'refs/tags/')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.update_baseline)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # The repo's rust-toolchain.toml pin wins over the rustup default.
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install jq
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq
+
+      - name: Cache cargo target
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: perf-baseline-target-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: perf-baseline-target-
+
+      - name: Run criterion benches
+        run: |
+          timeout 1500 cargo bench -p consortium-fanout-sim \
+            --bench cascade_strategies -- "$PERF_BENCH_FILTER" --quick
+
+      - name: Store baseline
+        run: |
+          REF='${{ github.ref }}'
+          # peter-evans/create-pull-request commits the working tree, so the
+          # stored file is what lands in the baseline PR below.
+          bash autoresearch/scripts/perf-baseline.sh store \
+            --ref "$REF" --sha "${{ github.sha }}" \
+            --notes "measured on ${{ github.run_id }}" \
+            --est target/criterion > /dev/null
+          echo "Stored $REF -> autoresearch/perf-baselines/refs/$(echo "$REF" | sed 's|^refs/||; s|/|__|g').json"
+
+      - name: Open baseline-update PR
+        # A push to a non-default branch is how a branch gets its *first*
+        # baseline. The job-level `if` has already excluded default-branch and tag
+        # pushes, so by the time we get here `github.ref_name` is always a branch
+        # that can accept a PR.
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: perf/baseline-${{ github.run_id }}
+          # Default would be the repository default branch, which is wrong for a
+          # per-branch baseline: on a push to sync-upstream-1.10.1 the baseline
+          # must land back on sync-upstream-1.10.1, and on a push to any other
+          # branch, on that branch.
+          base: ${{ github.ref_name }}
+          commit-message: "chore(perf): refresh baseline for ${{ github.ref_name }}"
+          title: "chore(perf): refresh perf baseline for ${{ github.ref_name }}"
+          body: |
+            Automated perf baseline refresh.
+
+            - ref: `${{ github.ref }}`
+            - sha: `${{ github.sha }}`
+            - run: [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+
+            The perf gate compares PRs against this file. Re-measuring is only
+            worth merging when the toolchain, runner, or workload changed — not
+            to paper over a real regression.
+          add-paths: autoresearch/perf-baselines
+          delete-branch: true
