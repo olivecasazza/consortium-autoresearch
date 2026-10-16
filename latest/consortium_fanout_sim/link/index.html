@@ -12,7 +12,7 @@ round trips grows with the byte count, not just with bandwidth.</li>
 <li><strong>Asymmetry.</strong> Real cluster links are asymmetric (the builder’s
 downlink is the bottleneck pushing to a node, its uplink is
 what pulls the closure). Direction is already modelled by
-[<code>consortium_nix::cascade::NodeSpec</code>]’s separate <code>uplink</code> /
+<a href="../../consortium_nix/cascade/struct.NodeSpec.html" title="struct consortium_nix::cascade::NodeSpec"><code>consortium_nix::cascade::NodeSpec</code></a>’s separate <code>uplink</code> /
 <code>downlink</code>; this module makes the <em>cost</em> respect it.</li>
 </ol>
 <p>Everything here is a pure function of the model plus the edge

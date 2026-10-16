@@ -11,15 +11,15 @@ so call sites read as a spec sheet.</p>
 ) -&gt; <a class="primitive" href="https://doc.rust-lang.org/1.94.1/std/primitive.u64.html">u64</a></h4></section></summary><div class="docblock"><p>Effective bytes/second for one edge, applying contention and
 direction.</p>
 <p><code>uplink</code> / <code>downlink</code> come from
-[<code>consortium_nix::cascade::NodeSpec</code>]. A node with no
+<a href="../../consortium_nix/cascade/struct.NodeSpec.html" title="struct consortium_nix::cascade::NodeSpec"><code>consortium_nix::cascade::NodeSpec</code></a>. A node with no
 <code>NodeSpec</code> should pass <code>u64::MAX</code>, which drops out of the
 <code>min</code> and leaves the per-edge <code>bandwidth</code> as the limit — that
 is the degenerate case the cascade already relies on.</p>
 </div></details><details class="toggle method-toggle" open><summary><section id="method.transfer_time" class="method"><a class="src rightside" href="../../src/consortium_fanout_sim/link.rs.html#273-303">Source</a><h4 class="code-header">pub fn <a href="#method.transfer_time" class="fn">transfer_time</a>(
     &amp;self,
     seed: <a class="primitive" href="https://doc.rust-lang.org/1.94.1/std/primitive.u64.html">u64</a>,
-    src: NodeId,
-    tgt: NodeId,
+    src: <a class="struct" href="../../consortium_nix/cascade/struct.NodeId.html" title="struct consortium_nix::cascade::NodeId">NodeId</a>,
+    tgt: <a class="struct" href="../../consortium_nix/cascade/struct.NodeId.html" title="struct consortium_nix::cascade::NodeId">NodeId</a>,
     bytes: <a class="primitive" href="https://doc.rust-lang.org/1.94.1/std/primitive.u64.html">u64</a>,
     effective_bandwidth: <a class="primitive" href="https://doc.rust-lang.org/1.94.1/std/primitive.u64.html">u64</a>,
     nominal_latency: <a class="struct" href="https://doc.rust-lang.org/1.94.1/core/time/struct.Duration.html" title="struct core::time::Duration">Duration</a>,
