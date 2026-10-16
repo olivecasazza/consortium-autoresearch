@@ -86,6 +86,58 @@ jobs:
           source .venv/bin/activate
           pip install pytest pytest-timeout pytest-xdist maturin pyyaml
 
+      # ── Local test environment ─────────────────────────────────
+      # CON-115: most upstream CLI cases drive clush with `-w $HOSTNAME`, i.e.
+      # they ssh from the runner to the runner. This job never set that up, so
+      # the ssh worker failed for every one of them: 23 of the 53 CLIClubakTest
+      # + CLIClushTest_A cases in run 36280765850 were red for an environmental
+      # reason that had nothing to do with the port. Every case that passed
+      # there was one that never reaches ssh (exec worker, _load_workerclass,
+      # a deliberately-timed-out copy, a globbing warning that excludes the
+      # node) — that is the signature of "ssh to self is broken", not of a
+      # porting gap.
+      #
+      # The steps below mirror upstream ClusterShell's own
+      # .github/workflows/tests.yml. The smoke test at the end fails this step
+      # loudly if the environment is still not right, so the next occurrence is
+      # one red line naming the cause instead of 23 red tests to re-triage.
+      - name: Set up loopback SSH for the upstream suite
+        run: |
+          set -euo pipefail
+          source .venv/bin/activate
+          chmod og-rw ~
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          rm -f ~/.ssh/id_rsa ~/.ssh/id_rsa.pub ~/.ssh/authorized_keys
+          ssh-keygen -q -t rsa -b 2048 -f ~/.ssh/id_rsa -N ""
+          cp ~/.ssh/id_rsa.pub ~/.ssh/authorized_keys
+          chmod 600 ~/.ssh/authorized_keys
+          printf '%s\n' 'Host *' '  StrictHostKeyChecking no' '  LogLevel ERROR' \
+            >> ~/.ssh/config
+          # Gateway tests ssh back into python, so the venv interpreter and its
+          # site-packages have to be visible on the remote side. Prepended
+          # because Ubuntu's .bashrc returns early when the shell is not
+          # interactive, and `ssh host cmd` runs a non-interactive shell.
+          GW_PY="$(readlink -f .venv/bin/python)"
+          GW_SITEPKG="$(realpath .venv/lib/python*/site-packages | head -1)"
+          sed -i "1iexport CLUSTERSHELL_GW_PYTHON_EXECUTABLE=$GW_PY" ~/.bashrc
+          sed -i "2iexport PYTHONPATH=\$PYTHONPATH:$GW_SITEPKG" ~/.bashrc
+          # WorkerPdsh shells out to pdsh, which needs an rcmd configured.
+          if ! command -v pdsh >/dev/null; then
+            sudo apt-get -y install pdsh
+          fi
+          echo ssh | sudo tee /etc/pdsh/rcmd_default >/dev/null
+
+          HOSTN="$(python -c 'import socket; print(socket.gethostname().split(".", 1)[0])')"
+          echo "short hostname: $HOSTN"
+          for target in "$HOSTN" 127.0.0.1; do
+            if ! ssh "$target" true; then
+              echo "::error::cannot ssh to ${target}; every upstream case using -w \$HOSTNAME will fail"
+              exit 1
+            fi
+            echo "ssh to ${target}: ok"
+          done
+          ssh "$HOSTN" echo "remote interpreter: ${GW_PY}"
+
       # ── Upstream sync ──────────────────────────────────────────
       - name: Sync upstream tests
         run: |
@@ -144,6 +196,20 @@ jobs:
           require_tests: true
 
       # ── Python tests: original backend ─────────────────────────
+      # CON-115: run the runner's own self-test first. The regression this
+      # guards is a *process* regression — clush's excepthook calls os._exit()
+      # from a worker thread, so pytest was killed mid-suite and the two steps
+      # below had nothing to publish. Reverting harness/scorecard_guard.py
+      # brings the abort back, and this step says so in one line instead of
+      # letting 1000 tests burn 5 minutes to produce a truncated log again.
+      - name: Verify the pytest runner cannot be hard-exited
+        if: ${{ !cancelled() }}
+        env:
+          PYTHONPATH: ${{ github.workspace }}/lib
+        run: |
+          source .venv/bin/activate
+          python harness/scorecard_guard.py
+
       # `continue-on-error` and the trailing `|| true` are both removed: this is
       # the step that decides whether a red Python test is red CI.
       # `if: ${{ !cancelled() }}` added: GitHub's default step condition is
