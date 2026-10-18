@@ -1,0 +1,48 @@
+# graduation-gate.toml — the single source of truth for the CON-4 graduation gate.
+#
+# Consumed by harness/graduation_gate.py. The values here are the ones printed by
+# `PASS`/`FAIL`, so this file and docs/graduation-gate.md must not disagree.
+#
+# Floor rationale and approver: docs/graduation-gate.md
+
+# ── Criterion 1: coverage ───────────────────────────────────────────────
+# Fraction of upstream test methods that must be simultaneously:
+#   (a) mapped to at least one Rust test in TEST_MAPPING.toml, AND
+#   (b) passing in the Rust-port run (results/rust-unit.xml), AND
+#   (c) passing in the CONSORTIUM_BACKEND=rust Python run (results/python-rust.xml)
+min_method_coverage = 0.80
+
+# Criterion 1b: a method that passes under CONSORTIUM_BACKEND=python but not
+# under CONSORTIUM_BACKEND=rust is a regression. Any regression fails the gate.
+# There is no tolerance knob on purpose — one regression is one regression.
+
+# ── Criterion 2: no unmapped critical paths ─────────────────────────────
+# Every upstream test class matching one of these globs must be fully mapped,
+# or carry a reviewed, recorded decision in harness/graduation-exemptions.toml.
+critical_class_globs = [
+    "Task*",
+    "Tree*",
+    "CLI*",
+    "MsgTree*",
+    "NodeSet*Group*",
+]
+
+# ── Criterion 3: the signal itself is trustworthy ───────────────────────
+# CON-198: the Rust-unit leg used to run `-p consortium`, which cargo resolves
+# to consortium-py, so it measured nothing and wrote a tests="0" JUnit file.
+# The gate refuses to read an empty Rust-unit leg: no signal, no PASS.
+require_nonempty_rust_leg = true
+require_collection_error_free = true
+
+# ── Provenance ──────────────────────────────────────────────────────────
+# Printed in the report so a PASS can be traced to what was measured.
+[upstream]
+repo = "cea-hpc/clustershell"
+ref_file = "UPSTREAM_REF"
+
+rust_leg_crate = "consortium-crate"
+
+[floor]
+approved_by = "CTO (CON-4 plan, revision 1) — see docs/graduation-gate.md"
+approved_on = "2026-07-18"
+issue = "CON-199"
