@@ -172,8 +172,17 @@
               inherit src;
             };
 
-            # Build the library
-            inherit consortium;
+            # Build the CLI through the root checks projection so Buildbot
+            # owns the same derivation the former Nix GHA job built.
+            inherit consortium consortium-cli;
+
+            # Exercise the installed command surface and grammar baseline.
+            consortium-cli-smoke = pkgs.runCommand "consortium-cli-smoke" { } ''
+              ${consortium-cli}/bin/cast --help >/dev/null
+              ${consortium-cli}/bin/claw --help >/dev/null
+              touch $out
+            '';
+
           };
 
           # ── Packages ───────────────────────────────────────────────────
