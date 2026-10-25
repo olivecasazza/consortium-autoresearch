@@ -30,6 +30,9 @@
         "aarch64-darwin"
         "x86_64-darwin"
       ];
+      # Hydra currently has x86_64-linux artifact workers only. Keep all
+      # package systems public; narrow only this explicit job projection.
+      transposition.hydraJobs.adHoc = true;
 
       # Non-per-system outputs
       flake = {
@@ -189,6 +192,11 @@
           packages = {
             inherit consortium consortium-cli consortium-nix;
             default = consortium;
+          };
+          # Publish the existing canonical packages only; no new recipes or
+          # default alias are introduced for Hydra.
+          hydraJobs = lib.optionalAttrs (system == "x86_64-linux") {
+            inherit consortium consortium-cli consortium-nix;
           };
 
           # ── Dev shell ──────────────────────────────────────────────────
