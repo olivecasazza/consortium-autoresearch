@@ -3,7 +3,7 @@
 //! These tests use specialized Docker images (nix-node, ansible-node)
 //! and verify that the actual tools work through the DAG executor.
 //!
-//!   cargo test -p consortium --features docker-tests --test tool_integration -- --test-threads=1
+//!   cargo test -p consortium-crate --features docker-tests --test tool_integration -- --test-threads=1
 
 #![cfg(feature = "docker-tests")]
 

@@ -94,12 +94,13 @@
           # ── Build artifacts (deps only, for caching) ───────────────────
           cargoArtifacts = craneLib.buildDepsOnly commonArgs;
 
-          # ── The Rust library crate ─────────────────────────────────────
+          # Public output name stays `consortium`; Cargo's actual package ID
+          # is `consortium-crate` (Cargo.toml workspace package alias).
           consortium = craneLib.buildPackage (
             commonArgs
             // {
               inherit cargoArtifacts;
-              cargoExtraArgs = "-p consortium";
+              cargoExtraArgs = "-p consortium-crate";
             }
           );
 

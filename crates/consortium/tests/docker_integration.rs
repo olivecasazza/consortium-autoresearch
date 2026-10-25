@@ -3,7 +3,7 @@
 //! These tests require Docker to be running and are gated behind
 //! the `docker-tests` feature flag:
 //!
-//!   cargo test -p consortium --features docker-tests --test docker_integration
+//!   cargo test -p consortium-crate --features docker-tests --test docker_integration
 
 #![cfg(feature = "docker-tests")]
 
@@ -25,7 +25,7 @@ use consortium_test_harness::{
 static CLUSTER: LazyLock<DockerCluster> = LazyLock::new(|| {
     DockerCluster::start_small().expect(
         "Failed to start Docker cluster. Is Docker running? \
-         Run with: cargo test -p consortium --features docker-tests --test docker_integration",
+         Run with: cargo test -p consortium-crate --features docker-tests --test docker_integration",
     )
 });
 
@@ -308,7 +308,7 @@ static LARGE_CLUSTER: LazyLock<DockerCluster> = LazyLock::new(|| {
     })
     .expect(
         "Failed to start large Docker cluster. Is Docker running? \
-         Run with: cargo test -p consortium --features docker-tests --test docker_integration",
+         Run with: cargo test -p consortium-crate --features docker-tests --test docker_integration",
     )
 });
 
