@@ -280,6 +280,7 @@ jobs:
         with:
           toolchain: ${{ steps.pin.outputs.channel }}
           components: clippy, rustfmt, rust-src
+      - uses: taiki-e/install-action@nextest
 
       - name: Verify toolchain binaries
         run: |
