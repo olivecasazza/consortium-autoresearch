@@ -30,6 +30,9 @@
         "aarch64-darwin"
         "x86_64-darwin"
       ];
+      # Hydra currently has x86_64-linux artifact workers only. Keep all
+      # package systems public; narrow only this explicit job projection.
+      transposition.hydraJobs.adHoc = true;
 
       # Non-per-system outputs
       flake = {
@@ -91,12 +94,13 @@
           # ── Build artifacts (deps only, for caching) ───────────────────
           cargoArtifacts = craneLib.buildDepsOnly commonArgs;
 
-          # ── The Rust library crate ─────────────────────────────────────
+          # Public output name stays `consortium`; Cargo's actual package ID
+          # is `consortium-crate` (Cargo.toml workspace package alias).
           consortium = craneLib.buildPackage (
             commonArgs
             // {
               inherit cargoArtifacts;
-              cargoExtraArgs = "-p consortium";
+              cargoExtraArgs = "-p consortium-crate";
             }
           );
 
@@ -172,14 +176,28 @@
               inherit src;
             };
 
-            # Build the library
-            inherit consortium;
+            # Build the CLI through the root checks projection so Buildbot
+            # owns the same derivation the former Nix GHA job built.
+            inherit consortium consortium-cli;
+
+            # Exercise the installed command surface and grammar baseline.
+            consortium-cli-smoke = pkgs.runCommand "consortium-cli-smoke" { } ''
+              ${consortium-cli}/bin/cast --help >/dev/null
+              ${consortium-cli}/bin/claw --help >/dev/null
+              touch $out
+            '';
+
           };
 
           # ── Packages ───────────────────────────────────────────────────
           packages = {
             inherit consortium consortium-cli consortium-nix;
             default = consortium;
+          };
+          # Publish the existing canonical packages only; no new recipes or
+          # default alias are introduced for Hydra.
+          hydraJobs = lib.optionalAttrs (system == "x86_64-linux") {
+            inherit consortium consortium-cli consortium-nix;
           };
 
           # ── Dev shell ──────────────────────────────────────────────────

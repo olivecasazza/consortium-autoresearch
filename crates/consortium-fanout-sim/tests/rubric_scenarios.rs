@@ -196,10 +196,8 @@ fn s2_bimodal_edge_bandwidth_is_inert_under_a_uniform_uplink() {
 
     let mut durations: Vec<Duration> = Vec::new();
     for snap in &trace.snapshots {
-        for outcome in snap.outcomes.values() {
-            if let Ok(d) = outcome {
-                durations.push(*d);
-            }
+        for d in snap.outcomes.values().flatten() {
+            durations.push(*d);
         }
     }
     assert!(!durations.is_empty(), "S2 produced no successful edges");
