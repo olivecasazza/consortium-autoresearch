@@ -300,6 +300,25 @@ jobs:
             echo "::error::or prepend \${CARGO_HOME:-\$HOME/.cargo}/bin to PATH in the runner's extraPackages."
             exit 1
           fi
+      # The ARC actions-runner image has Rust but no host C linker. Install the
+      # real linker needed by proc-macro/build-script compilation; fail loudly
+      # when the runner cannot install it instead of masking the tool tests.
+      - name: Install C linker
+        run: |
+          set -euo pipefail
+          command -v cc >/dev/null && { cc --version | head -1; exit 0; }
+          if [ "$(id -u)" -eq 0 ]; then
+            apt_get=(apt-get)
+          elif command -v sudo >/dev/null; then
+            apt_get=(sudo -n apt-get)
+          else
+            echo "::error::cc is absent and no apt-get/sudo path is available" >&2
+            exit 1
+          fi
+          "${apt_get[@]}" update
+          DEBIAN_FRONTEND=noninteractive "${apt_get[@]}" install -y --no-install-recommends build-essential
+          command -v cc >/dev/null
+          cc --version | head -1
 
       # CON-415: `hashFiles()` is not evaluated by the workflow engine. The
       # runner evaluates it itself, by spawning `externals/node20/bin/node` out
