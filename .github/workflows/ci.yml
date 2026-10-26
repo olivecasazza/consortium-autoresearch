@@ -260,7 +260,8 @@ jobs:
   tool-integration:
     name: Tool Integration Tests
     needs: unit
-    runs-on: nix-builder
+    # nixlab's per-repository ARC RunnerSet uses this scale-set label.
+    runs-on: nix-builder-consortium-autoresearch
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
